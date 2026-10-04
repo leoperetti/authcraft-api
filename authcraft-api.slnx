@@ -1,8 +1,10 @@
 <Solution>
+  <Project Path="Application/Application.csproj" />
   <Project Path="authcraft-api/authcraft-api.csproj" />
   <Project Path="authcraft-db/authcraft-db.sqlproj" Id="fde6d9b6-5d08-4c99-a2b3-893fc5ed9f0d">
     <Build />
     <Deploy />
   </Project>
-  <Project Path="Entities/Entities.csproj" DisplayName="entities" />
+  <Project Path="Domain/Domain.csproj" />
+  <Project Path="Infrastructure/Infrastructure.csproj" />
 </Solution>

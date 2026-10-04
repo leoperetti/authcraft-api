@@ -1,0 +1,5 @@
+﻿CREATE TABLE [dbo].[providers]
+(
+	id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_providers PRIMARY KEY,
+	name NVARCHAR(100) NOT NULL CONSTRAINT UQ_providers_name UNIQUE
+)

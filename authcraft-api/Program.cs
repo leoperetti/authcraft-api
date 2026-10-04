@@ -1,9 +1,26 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Infrastructure;
+using Azure.Identity;
+using Azure.Extensions.AspNetCore.Configuration.Secrets;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+
+// Si estamos en producción, cargar secretos desde Azure Key Vault
+if (builder.Environment.IsProduction())
+{
+    var keyVaultName = builder.Configuration["KeyVault:Name"];
+    if (!string.IsNullOrWhiteSpace(keyVaultName))
+    {
+        var kvUri = new Uri($"https://{keyVaultName}.vault.azure.net/");
+        builder.Configuration.AddAzureKeyVault(kvUri, new DefaultAzureCredential());
+    }
+}
+
+// Registrar capa de infraestructura (DbContext) después de cargar configuración/secretos
+builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddControllers();
 

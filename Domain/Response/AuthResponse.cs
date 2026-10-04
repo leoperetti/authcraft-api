@@ -1,7 +1,7 @@
-﻿using Entities.Dto;
+﻿using Domain.Dto;
 using System.ComponentModel.DataAnnotations;
 
-namespace Entities.Response
+namespace Domain.Response
 {
     public class AuthResponse
     {

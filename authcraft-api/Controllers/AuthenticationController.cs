@@ -1,7 +1,4 @@
-﻿using Entities.Request;
-using Entities.Response;
-using Entities.Dto;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -9,6 +6,9 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Domain.Response;
+using Domain.Request;
+using Domain.Dto;
 
 namespace authcraft_api.Controllers
 {
