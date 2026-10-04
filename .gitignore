@@ -1,0 +1,21 @@
+## Ignore Visual Studio temporary files, build outputs, and user-specific files
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.nupkg
+packages/
+*.log
+.vscode/
+.DS_Store
+
+# dotnet
+project.lock.json
+artifacts/
+
+# Ignore DB project model files
+*.dbmdl
+*.jfm

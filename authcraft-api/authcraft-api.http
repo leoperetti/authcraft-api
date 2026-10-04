@@ -1,0 +1,6 @@
+@authcraft_api_HostAddress = http://localhost:5171
+
+GET {{authcraft_api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
