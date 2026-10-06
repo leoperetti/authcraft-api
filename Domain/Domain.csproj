@@ -5,5 +5,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <!-- Removed EF Core packages: mapping now in Infrastructure -->
 
 </Project>

@@ -1,15 +1,15 @@
+using Azure.Identity;
+using Infrastructure;
+using Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
-using Infrastructure;
-using Azure.Identity;
+using Microsoft.EntityFrameworkCore;
 
 public partial class Program
 {
     private static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
-
-        // Add services to the container.
 
         // Si estamos en producción, cargar secretos desde Azure Key Vault
         if (builder.Environment.IsProduction())
@@ -20,6 +20,9 @@ public partial class Program
                 var kvUri = new Uri($"https://{keyVaultName}.vault.azure.net/");
                 builder.Configuration.AddAzureKeyVault(kvUri, new DefaultAzureCredential());
             }
+            var connectionString = builder.Configuration.GetConnectionString("AZURE_SQL_CONNECTIONSTRING");
+            builder.Services.AddDbContext<AppDbContext>(options =>
+                options.UseSqlServer(connectionString));
         }
 
         // Registrar capa de infraestructura (DbContext) después de cargar configuración/secretos
@@ -45,14 +48,12 @@ public partial class Program
 
         builder.Services.AddAuthorization();
 
-        // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
         builder.Services.AddOpenApi();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
 
         var app = builder.Build();
 
-        // Configure the HTTP request pipeline.
         if (app.Environment.IsDevelopment())
         {
             app.MapOpenApi();
@@ -62,7 +63,6 @@ public partial class Program
 
         app.UseHttpsRedirection();
 
-        // Añadir autenticación antes de autorización
         app.UseAuthentication();
         app.UseAuthorization();
 
