@@ -1,9 +1,8 @@
 using Azure.Identity;
+using System.Collections.Generic;
 using Infrastructure;
-using Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
-using Microsoft.EntityFrameworkCore;
 
 public partial class Program
 {
@@ -12,7 +11,7 @@ public partial class Program
         var builder = WebApplication.CreateBuilder(args);
 
         // Si estamos en producción, cargar secretos desde Azure Key Vault
-        if (builder.Environment.IsProduction())
+        if (builder.Environment.IsProduction() || builder.Environment.IsStaging())
         {
             var keyVaultName = builder.Configuration["KeyVault:Name"];
             if (!string.IsNullOrWhiteSpace(keyVaultName))
@@ -23,17 +22,21 @@ public partial class Program
         }
 
         // Leer posibles secretos desde Key Vault (si existen) y pasarlos a la capa de infraestructura
-        // Soportamos secreto llamado "ConnectionString" en Key Vault, o la tradicional ConnectionStrings:DefaultConnection / AZURE_SQL_CONNECTIONSTRING
-        // Key Vault secret name for DB connection string can be 'DatabaseConnectionString' or 'ConnectionString'
         var connectionStringFromKeyVault = builder.Configuration["DatabaseConnectionString"];
 
-        // Registrar capa de infraestructura (DbContext) después de cargar configuración/secretos
+        var jwtKeyFromKv = builder.Configuration["JwtKey"] ?? builder.Configuration["Jwt:Key"];
+        if (!string.IsNullOrWhiteSpace(jwtKeyFromKv) && string.IsNullOrWhiteSpace(builder.Configuration["Jwt:Key"]))
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string>
+            {
+                { "Jwt:Key", jwtKeyFromKv }
+            });
+        }
+
         builder.Services.AddInfrastructure(builder.Configuration, connectionStringFromKeyVault);
 
         builder.Services.AddControllers();
 
-        // Configura autenticación externa (Google). Preferimos leer ClientId/ClientSecret desde Key Vault.
-        // Soportamos estos nombres en Key Vault: ClientId, ClientSecret, ClientSecretId
         var googleClientId = builder.Configuration["ClientId"] ?? builder.Configuration["Authentication:Google:ClientId"];
         var googleClientSecret = builder.Configuration["ClientSecret"] ?? builder.Configuration["ClientSecretId"] ?? builder.Configuration["Authentication:Google:ClientSecret"];
 
@@ -57,7 +60,6 @@ public partial class Program
             {
                 googleOptions.ClientId = googleClientId;
                 googleOptions.ClientSecret = googleClientSecret;
-                // Ruta de callback usada por Google tras autenticación; debe coincidir con el controlador
                 googleOptions.CallbackPath = "/api/authentication/google/callback";
             });
         }
@@ -73,9 +75,8 @@ public partial class Program
         if (app.Environment.IsDevelopment())
         {
             app.MapOpenApi();
+            app.UseSwagger(); app.UseSwaggerUI(c => { c.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1"); c.RoutePrefix = string.Empty; });
         }
-
-        if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(c => { c.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1"); c.RoutePrefix = string.Empty; }); }
 
         app.UseHttpsRedirection();
 

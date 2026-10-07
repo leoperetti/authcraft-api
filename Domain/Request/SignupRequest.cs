@@ -8,6 +8,9 @@ namespace Domain.Request
         public string Email { get; set; } = null!;
 
         [Required]
+        public string PhoneNumber { get; set; } = null!;
+
+        [Required]
         public string FirstName { get; set; } = null!;
 
         [Required]

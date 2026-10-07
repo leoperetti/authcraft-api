@@ -28,9 +28,19 @@ namespace Application.Services
                 throw new InvalidOperationException("El email con el que intenta registrarse ya existe");
 
             var now = DateTimeOffset.UtcNow;
+            // Validate and normalize phone number to E.164 format
+            string? normalizedPhone = null;
+            if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
+            {
+                normalizedPhone = NormalizeE164(request.PhoneNumber);
+                if (normalizedPhone == null)
+                    throw new InvalidOperationException("El número de teléfono debe estar en formato E.164 (por ejemplo +5511999998888)");
+            }
+
             var user = new User
             {
                 Email = request.Email ?? string.Empty,
+                PhoneNumber = normalizedPhone,
                 Name = $"{request.FirstName} {request.LastName}",
                 CreatedAt = now,
                 UpdatedAt = now
@@ -67,6 +77,27 @@ namespace Application.Services
             await _localAccounts.AddAsync(local);
 
             return user;
+        }
+
+        private static string? NormalizeE164(string phone)
+        {
+            if (string.IsNullOrWhiteSpace(phone)) return null;
+            // Remove common separators and whitespace
+            var cleaned = phone.Trim();
+            cleaned = cleaned.Replace(" ", string.Empty).Replace("-", string.Empty).Replace("(", string.Empty).Replace(")", string.Empty);
+            // Ensure starts with + and then 2-15 digits according to E.164
+            var match = System.Text.RegularExpressions.Regex.Match(cleaned, "^\\+?[0-9]{2,15}$");
+            if (!match.Success)
+                return null;
+
+            // If it doesn't start with '+', add it? We require + prefix for E.164
+            if (!cleaned.StartsWith('+')) cleaned = "+" + cleaned;
+
+            // Final validation: + followed by 1-15 digits, first digit cannot be 0
+            if (System.Text.RegularExpressions.Regex.IsMatch(cleaned, "^\\+[1-9][0-9]{1,14}$"))
+                return cleaned;
+
+            return null;
         }
 
         public async Task<bool> VerifyPasswordAsync(string password, Domain.Entities.LocalAccount localAccount)

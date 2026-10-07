@@ -18,6 +18,10 @@ namespace Infrastructure.Data.Configurations
                 .HasMaxLength(320)
                 .HasColumnName("email");
 
+            builder.Property(u => u.PhoneNumber)
+                .HasMaxLength(20)
+                .HasColumnName("phone_number");
+
             builder.Property(u => u.Name)
                 .HasMaxLength(200)
                 .HasColumnName("name");

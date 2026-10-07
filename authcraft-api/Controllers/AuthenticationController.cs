@@ -28,6 +28,12 @@ namespace authcraft_api.Controllers
             _localAuthService = localAuthService;
         }
 
+        private string GetJwtKey()
+        {
+            // Prefer hierarchical key, then fallbacks that map better to Key Vault secret names
+            return _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key not configured");
+        }
+
         [HttpPost("signup")]
         public async Task<ActionResult<AuthResponse>> Signup([FromBody] SignupRequest request)
         {
@@ -52,7 +58,7 @@ namespace authcraft_api.Controllers
         {
             try
             {
-                var jwtKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key not configured");
+                var jwtKey = GetJwtKey();
                 var jwtIssuer = _configuration["Jwt:Issuer"] ?? string.Empty;
                 var jwtAudience = _configuration["Jwt:Audience"] ?? string.Empty;
 
@@ -125,7 +131,7 @@ namespace authcraft_api.Controllers
             await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
 
             // Generar JWT (igual que en callback)
-            var jwtKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key not configured");
+            var jwtKey = GetJwtKey();
             var jwtIssuer = _configuration["Jwt:Issuer"] ?? string.Empty;
             var jwtAudience = _configuration["Jwt:Audience"] ?? string.Empty;
 
