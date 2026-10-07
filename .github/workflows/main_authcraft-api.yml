@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read # This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
@@ -23,31 +23,50 @@ jobs:
         with:
           dotnet-version: '10.x'
 
-      - name: Build with dotnet
-        run: dotnet build --configuration Release
+      # --- Compilación de la API (.NET) ---
+      # Compilamos solo el proyecto de la API para evitar el error del .sqlproj
+      - name: Build API with dotnet
+        run: dotnet build authcraft-api/authcraft-api.csproj --configuration Release
 
-      - name: dotnet publish
-        run: dotnet publish -c Release -o "${{env.DOTNET_ROOT}}/myapp"
+      - name: dotnet publish API
+        run: dotnet publish authcraft-api/authcraft-api.csproj -c Release -o "${{env.DOTNET_ROOT}}/myapp"
 
-      - name: Upload artifact for deployment job
+      - name: Upload API artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: .net-app
           path: ${{env.DOTNET_ROOT}}/myapp
 
+      # --- Compilación del Proyecto de Base de Datos (.sqlproj) ---
+      # Usamos msbuild, que sí entiende los .sqlproj tradicionales en Windows
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Database Project
+        run: msbuild authcraft-db/authcraft-db.sqlproj /p:Configuration=Release
+
+      - name: Upload dacpac artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dacpac
+          # Ajusta la ruta si tu .dacpac se genera en otro lugar.
+          # Por defecto, msbuild lo deja en bin/Release/
+          path: authcraft-db/bin/Release/authcraft-db.dacpac
+
   deploy:
     runs-on: windows-latest
     needs: build
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write # This is required for requesting the JWT
+      contents: read # This is required for actions/checkout
 
     steps:
-      - name: Download artifact from build job
+      # --- Despliegue de la API (como ya lo tenías) ---
+      - name: Download API artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: .net-app
-      
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -55,11 +74,27 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_B25DCFFFC916496E99D5889500CCF662 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_67CD7042E7E9489EAF1EFD52BDC126E5 }}
 
-      - name: Deploy to Azure Web App
+      - name: Deploy API to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'authcraft-api'
           slot-name: 'Production'
           package: .
-          
+
+      # --- Despliegue de la Base de Datos (NUEVO) ---
+      - name: Download dacpac artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          # Lo descargamos a una carpeta específica para no mezclarlo con la API
+          path: ./db
+
+      - name: Deploy Database to Azure SQL
+        # Usamos sql-action. Al haber hecho login antes, gestiona la regla de firewall temporal si es necesario.
+        uses: azure/sql-action@v2.3
+        with:
+          # Necesitas crear este secreto en GitHub con tu cadena de conexión a Azure SQL
+          connection-string: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+          path: './db/authcraft-db.dacpac'
+          action: 'publish'
