@@ -20,31 +20,47 @@ public partial class Program
                 var kvUri = new Uri($"https://{keyVaultName}.vault.azure.net/");
                 builder.Configuration.AddAzureKeyVault(kvUri, new DefaultAzureCredential());
             }
-            var connectionString = builder.Configuration.GetConnectionString("AZURE_SQL_CONNECTIONSTRING");
-            builder.Services.AddDbContext<AppDbContext>(options =>
-                options.UseSqlServer(connectionString));
         }
 
+        // Leer posibles secretos desde Key Vault (si existen) y pasarlos a la capa de infraestructura
+        // Soportamos secreto llamado "ConnectionString" en Key Vault, o la tradicional ConnectionStrings:DefaultConnection / AZURE_SQL_CONNECTIONSTRING
+        // Key Vault secret name for DB connection string can be 'DatabaseConnectionString' or 'ConnectionString'
+        var connectionStringFromKeyVault = builder.Configuration["DatabaseConnectionString"];
+
         // Registrar capa de infraestructura (DbContext) después de cargar configuración/secretos
-        builder.Services.AddInfrastructure(builder.Configuration);
+        builder.Services.AddInfrastructure(builder.Configuration, connectionStringFromKeyVault);
 
         builder.Services.AddControllers();
 
-        // Configura autenticación externa (Google). Los valores se leen de la configuración:
-        // Authentication:Google:ClientId y Authentication:Google:ClientSecret
-        builder.Services.AddAuthentication(options =>
+        // Configura autenticación externa (Google). Preferimos leer ClientId/ClientSecret desde Key Vault.
+        // Soportamos estos nombres en Key Vault: ClientId, ClientSecret, ClientSecretId
+        var googleClientId = builder.Configuration["ClientId"] ?? builder.Configuration["Authentication:Google:ClientId"];
+        var googleClientSecret = builder.Configuration["ClientSecret"] ?? builder.Configuration["ClientSecretId"] ?? builder.Configuration["Authentication:Google:ClientSecret"];
+
+        var googleConfigured = !string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret);
+
+        // Configurar esquema de autenticación; solo usar Google como challenge si está configurado
+        var authBuilder = builder.Services.AddAuthentication(options =>
         {
             options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
-        })
-            .AddCookie()
-            .AddGoogle(googleOptions =>
+            if (googleConfigured)
             {
-                googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"];
-                googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
+                options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
+            }
+        });
+
+        authBuilder.AddCookie();
+
+        if (googleConfigured)
+        {
+            authBuilder.AddGoogle(googleOptions =>
+            {
+                googleOptions.ClientId = googleClientId;
+                googleOptions.ClientSecret = googleClientSecret;
                 // Ruta de callback usada por Google tras autenticación; debe coincidir con el controlador
                 googleOptions.CallbackPath = "/api/authentication/google/callback";
             });
+        }
 
         builder.Services.AddAuthorization();
 

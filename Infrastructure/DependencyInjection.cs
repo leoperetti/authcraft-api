@@ -7,11 +7,15 @@ namespace Infrastructure
 {
     public static class DependencyInjection
     {
-        public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+        public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, string? connectionStringOverride = null)
         {
-            var connectionString = configuration.GetConnectionString("DefaultConnection");
+            if (string.IsNullOrWhiteSpace(connectionStringOverride))
+            {
+                throw new InvalidOperationException("Database connection string is not configured. Set ConnectionStrings:DefaultConnection or ConnectionStrings:AZURE_SQL_CONNECTIONSTRING or provide an override.");
+            }
+
             services.AddDbContext<AppDbContext>(options =>
-                options.UseSqlServer(connectionString));
+                options.UseSqlServer(connectionStringOverride));
 
             // Repositories
             services.AddScoped<Application.Repositories.IUserRepository, Infrastructure.Repositories.UserRepository>();
