@@ -17,9 +17,11 @@ namespace Infrastructure
             services.AddScoped<Application.Repositories.IUserRepository, Infrastructure.Repositories.UserRepository>();
             services.AddScoped<Application.Repositories.IProviderRepository, Infrastructure.Repositories.ProviderRepository>();
             services.AddScoped<Application.Repositories.IOAuthAccountRepository, Infrastructure.Repositories.OAuthAccountRepository>();
+            services.AddScoped<Application.Repositories.ILocalAccountRepository, Infrastructure.Repositories.LocalAccountRepository>();
 
             // Application services implemented here
-            services.AddScoped<Application.Services.IAuthenticationService, Infrastructure.Services.AuthenticationService>();
+            services.AddScoped<Application.Services.IAuthenticationService, Application.Services.AuthenticationService>();
+            services.AddScoped<Application.Services.ILocalAuthService, Application.Services.LocalAuthenticationService>();
 
             return services;
         }

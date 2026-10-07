@@ -12,6 +12,7 @@ namespace Infrastructure.Data
         public DbSet<User> Users { get; set; } = null!;
         public DbSet<OAuthAccount> OAuthAccounts { get; set; } = null!;
         public DbSet<Provider> Providers { get; set; } = null!;
+        public DbSet<LocalAccount> LocalAccounts { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

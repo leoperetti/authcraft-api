@@ -1,5 +1,6 @@
-using System.Threading.Tasks;
 using Domain.Entities;
+using Domain.Request;
+using Domain.Response;
 
 namespace Application.Services
 {
@@ -8,5 +9,6 @@ namespace Application.Services
     public interface IAuthenticationService
     {
         Task<(User user, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info);
+        Task<AuthResponse> LoginWithPasswordAsync(LoginRequest request, string jwtKey, string? jwtIssuer, string? jwtAudience);
     }
 }

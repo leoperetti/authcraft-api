@@ -4,8 +4,6 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Google.Apis.Auth;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.EntityFrameworkCore;
-using Infrastructure.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -21,32 +19,61 @@ namespace authcraft_api.Controllers
     {
         private readonly IConfiguration _configuration;
         private readonly Application.Services.IAuthenticationService _authService;
+        private readonly Application.Services.ILocalAuthService _localAuthService;
 
-        public AuthenticationController(IConfiguration configuration, Application.Services.IAuthenticationService authService)
+        public AuthenticationController(IConfiguration configuration, Application.Services.IAuthenticationService authService, Application.Services.ILocalAuthService localAuthService)
         {
             _configuration = configuration;
             _authService = authService;
+            _localAuthService = localAuthService;
         }
 
         [HttpPost("signup")]
         public async Task<ActionResult<AuthResponse>> Signup([FromBody] SignupRequest request)
         {
-            // TODO: implementar registro
-            return StatusCode(501); // Not Implemented
+            try
+            {
+                var user = await _localAuthService.SignupAsync(request);
+                return Ok(new { message = "Registro exitoso", email = user.Email });
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Conflicto, por ejemplo usuario ya existe
+                return Conflict(new { message = ex.Message });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new { message = "Error interno al registrar usuario" });
+            }
         }
 
         [HttpPost("login")]
         public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
         {
-            // TODO: implementar autenticación
-            return StatusCode(501);
+            try
+            {
+                var jwtKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key not configured");
+                var jwtIssuer = _configuration["Jwt:Issuer"] ?? string.Empty;
+                var jwtAudience = _configuration["Jwt:Audience"] ?? string.Empty;
+
+                var response = await _authService.LoginWithPasswordAsync(request, jwtKey, jwtIssuer, jwtAudience);
+                return Ok(response);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception)
+            {
+                return StatusCode(500, new { message = "Error interno al autenticar usuario" });
+            }
         }
 
         [HttpPost("auth/google")]
         public async Task<ActionResult<AuthResponse>> VerifyGoogleIdToken([FromBody] GoogleLoginRequest request)
         {
             if (request == null || string.IsNullOrEmpty(request.IdToken))
-                return BadRequest("idToken is required");
+                return BadRequest("Se requiere idToken");
 
             var clientId = _configuration["Authentication:Google:ClientId"];
             if (string.IsNullOrEmpty(clientId))
@@ -63,15 +90,15 @@ namespace authcraft_api.Controllers
             }
             catch (InvalidJwtException)
             {
-                return BadRequest("Invalid ID token");
+                return BadRequest("Token de ID inválido");
             }
 
             // Validaciones adicionales
             if (payload.EmailVerified != true)
-                return BadRequest("Email not verified by provider");
+                return BadRequest("El proveedor no ha verificado el correo electrónico");
 
             if (payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com")
-                return BadRequest("Invalid token issuer");
+                return BadRequest("Emisor del token inválido");
 
             // Delegate business logic to Application service
             var info = new Application.Services.GoogleAuthInfo(
@@ -85,11 +112,11 @@ namespace authcraft_api.Controllers
             var (user, oauth) = await _authService.UpsertFromGoogleAsync(info);
 
             // Crear ClaimsPrincipal para la sesión
-            var claims = new List<System.Security.Claims.Claim>
+            var claims = new List<Claim>
             {
-                new System.Security.Claims.Claim(ClaimTypes.NameIdentifier, payload.Subject ?? string.Empty),
-                new System.Security.Claims.Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
-                new System.Security.Claims.Claim(ClaimTypes.Name, payload.Name ?? string.Empty)
+                new Claim(ClaimTypes.NameIdentifier, payload.Subject ?? string.Empty),
+                new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
+                new Claim(ClaimTypes.Name, payload.Name ?? string.Empty)
             };
 
             var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
@@ -106,11 +133,11 @@ namespace authcraft_api.Controllers
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
             var signingCredentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-            var tokenClaims = new List<System.Security.Claims.Claim>
+            var tokenClaims = new List<Claim>
             {
-                new System.Security.Claims.Claim(JwtRegisteredClaimNames.Sub, payload.Subject ?? string.Empty),
-                new System.Security.Claims.Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
-                new System.Security.Claims.Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
+                new Claim(JwtRegisteredClaimNames.Sub, payload.Subject ?? string.Empty),
+                new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
+                new Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
             };
 
             var expires = DateTime.UtcNow.AddHours(10);
@@ -140,82 +167,6 @@ namespace authcraft_api.Controllers
                 User = userDto
             };
 
-            return Ok(response);
-        }
-
-        // Inicia el flujo OAuth con Google (redirección)
-        [HttpGet("google/signin")]
-        public IActionResult GoogleSignIn([FromQuery] string returnUrl = "/")
-        {
-            var props = new AuthenticationProperties { RedirectUri = returnUrl };
-            return Challenge(props, GoogleDefaults.AuthenticationScheme);
-        }
-
-        // Callback que Google redirige tras autenticación
-        [HttpGet("google/callback")]
-        public async Task<ActionResult<AuthResponse>> GoogleCallback([FromQuery] string? returnUrl = "/")
-        {
-            var authenticateResult = await HttpContext.AuthenticateAsync(GoogleDefaults.AuthenticationScheme);
-            if (!authenticateResult.Succeeded || authenticateResult.Principal == null)
-            {
-                return BadRequest("Google authentication failed");
-            }
-
-            var principal = authenticateResult.Principal;
-
-            // Extraer datos del usuario
-            var id = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? string.Empty;
-            var email = principal.FindFirst(ClaimTypes.Email)?.Value ?? principal.FindFirst("email")?.Value ?? string.Empty;
-            var firstName = principal.FindFirst(ClaimTypes.GivenName)?.Value ?? principal.FindFirst("given_name")?.Value ?? string.Empty;
-            var lastName = principal.FindFirst(ClaimTypes.Surname)?.Value ?? principal.FindFirst("family_name")?.Value ?? string.Empty;
-
-            // Firmar cookie de aplicación
-            await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-
-            // Generar JWT
-            var jwtKey = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key not configured");
-            var jwtIssuer = _configuration["Jwt:Issuer"] ?? string.Empty;
-            var jwtAudience = _configuration["Jwt:Audience"] ?? string.Empty;
-
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
-            var signingCredentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-            var tokenClaims = new List<Claim>
-            {
-                new Claim(JwtRegisteredClaimNames.Sub, id),
-                new Claim(ClaimTypes.Email, email),
-                new Claim(ClaimTypes.Name, $"{firstName} {lastName}"),
-            };
-
-            var expires = DateTime.UtcNow.AddHours(1);
-            var token = new JwtSecurityToken(
-                issuer: string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
-                audience: string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,
-                claims: tokenClaims,
-                expires: expires,
-                signingCredentials: signingCredentials
-            );
-
-            var tokenString = tokenHandler.WriteToken(token);
-
-            var userDto = new AuthUserDto
-            {
-                Id = id,
-                Email = email,
-                FirstName = string.IsNullOrEmpty(firstName) ? ( (principal.Identity?.Name ?? string.Empty).Split(' ')[0] ) : firstName,
-                LastName = string.IsNullOrEmpty(lastName) ? ( (principal.Identity?.Name ?? string.Empty).Split(' ').Skip(1).FirstOrDefault() ?? string.Empty ) : lastName
-            };
-
-            var response = new AuthResponse
-            {
-                AccessToken = tokenString,
-                TokenType = "Bearer",
-                ExpiresIn = (int)(expires - DateTime.UtcNow).TotalSeconds,
-                User = userDto
-            };
-
-            // Puedes redirigir al cliente o devolver JSON con token y user. Aquí devolvemos JSON.
             return Ok(response);
         }
 
