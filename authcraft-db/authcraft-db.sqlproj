@@ -64,8 +64,13 @@
     <Build Include="Tables\providers.sql" />
     <Build Include="Tables\users.sql" />
     <Build Include="Tables\local_accounts.sql" />
+    <Build Include="Tables\roles.sql" />
+    <Build Include="Tables\users_roles.sql" />
   </ItemGroup>
   <ItemGroup>
     <PostDeploy Include="postdeploys\Script.PostDeployment.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <RefactorLog Include="authcraft-db.refactorlog" />
   </ItemGroup>
 </Project>

@@ -1,8 +1,12 @@
 using Azure.Identity;
-using System.Collections.Generic;
 using Infrastructure;
+using Application;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using System.Security.Claims;
 
 public partial class Program
 {
@@ -34,6 +38,7 @@ public partial class Program
         }
 
         builder.Services.AddInfrastructure(builder.Configuration, connectionStringFromKeyVault);
+        builder.Services.AddApplicationDependencies();
 
         builder.Services.AddControllers();
 
@@ -45,7 +50,9 @@ public partial class Program
         // Configurar esquema de autenticación; solo usar Google como challenge si está configurado
         var authBuilder = builder.Services.AddAuthentication(options =>
         {
-            options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            // Authenticate API requests with JWTs by default; use cookies for sign-in flows
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
             if (googleConfigured)
             {
                 options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
@@ -53,6 +60,28 @@ public partial class Program
         });
 
         authBuilder.AddCookie();
+
+        // Add JWT bearer authentication so the API can validate incoming JWTs
+        authBuilder.AddJwtBearer(options =>
+        {
+            var jwtKey = jwtKeyFromKv ?? string.Empty;
+            var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? string.Empty;
+            var jwtAudience = builder.Configuration["Jwt:Audience"] ?? string.Empty;
+
+            options.RequireHttpsMetadata = true;
+            options.SaveToken = true;
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+                ValidateIssuer = !string.IsNullOrEmpty(jwtIssuer),
+                ValidIssuer = string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
+                ValidateAudience = !string.IsNullOrEmpty(jwtAudience),
+                ValidAudience = string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,
+                NameClaimType = ClaimTypes.Name,
+                RoleClaimType = ClaimTypes.Role
+            };
+        });
 
         if (googleConfigured)
         {

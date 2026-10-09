@@ -1,12 +1,13 @@
-using Application.Repositories;
+using Application.Interfaces;
+using Infrastructure.Repositories;
+using Domain.Dto;
 using Domain.Entities;
 using Domain.Request;
 using Domain.Response;
-using Domain.Dto;
-using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 
 namespace Application.Services
 {
@@ -17,14 +18,18 @@ namespace Application.Services
         private readonly IOAuthAccountRepository _oauths;
         private readonly ILocalAccountRepository _localAccounts;
         private readonly ILocalAuthService _localAuthService;
+        private readonly IRoleRepository _roles;
+        private readonly IRoleService _roleService;
 
-        public AuthenticationService(IProviderRepository providers, IUserRepository users, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService)
+        public AuthenticationService(IProviderRepository providers, IUserRepository users, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleRepository roles, IRoleService roleService)
         {
             _providers = providers;
             _users = users;
             _oauths = oauths;
             _localAccounts = localAccounts;
             _localAuthService = localAuthService;
+            _roles = roles;
+            _roleService = roleService;
         }
 
         public async Task<(User user, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info)
@@ -81,6 +86,7 @@ namespace Application.Services
             };
 
             await _oauths.AddAsync(newOauth);
+            await _roleService.AssignRoleAsync(user.Id, "user");
 
             return (user, newOauth);
         }
@@ -109,7 +115,14 @@ namespace Application.Services
                 new Claim(ClaimTypes.Name, user.Name ?? string.Empty),
             };
 
-            var expires = DateTime.UtcNow.AddHours(10);
+            // Añadir claims de roles
+            var roleNames = await _roles.GetRolesByUserIdAsync(user.Id);
+            foreach (var rn in roleNames)
+            {
+                tokenClaims.Add(new Claim(ClaimTypes.Role, rn));
+            }
+
+            var expires = DateTime.UtcNow.AddHours(100);
             var token = new JwtSecurityToken(
                 issuer: string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
                 audience: string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,

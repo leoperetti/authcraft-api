@@ -17,3 +17,13 @@ IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'apple')
 IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'github')
 	INSERT INTO dbo.providers (name) VALUES ('github');
 GO
+
+-- Seed roles: admin y user (no duplicados)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[roles] WHERE [name] = 'superadmin')
+	INSERT INTO [dbo].[roles] ([name]) VALUES ('superadmin');
+
+IF NOT EXISTS (SELECT 1 FROM [dbo].[roles] WHERE [name] = 'admin')
+	INSERT INTO [dbo].[roles] ([name]) VALUES ('admin');
+
+IF NOT EXISTS (SELECT 1 FROM [dbo].[roles] WHERE [name] = 'user')
+	INSERT INTO [dbo].[roles] ([name]) VALUES ('user');

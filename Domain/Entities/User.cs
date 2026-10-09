@@ -14,5 +14,6 @@ namespace Domain.Entities
         public DateTimeOffset UpdatedAt { get; set; }
 
         public ICollection<OAuthAccount> OAuthAccounts { get; set; } = new List<OAuthAccount>();
+        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
     }
 }

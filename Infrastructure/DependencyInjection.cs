@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Infrastructure.Data;
+using Infrastructure.Repositories;
 
 namespace Infrastructure
 {
@@ -18,14 +19,11 @@ namespace Infrastructure
                 options.UseSqlServer(connectionStringOverride));
 
             // Repositories
-            services.AddScoped<Application.Repositories.IUserRepository, Infrastructure.Repositories.UserRepository>();
-            services.AddScoped<Application.Repositories.IProviderRepository, Infrastructure.Repositories.ProviderRepository>();
-            services.AddScoped<Application.Repositories.IOAuthAccountRepository, Infrastructure.Repositories.OAuthAccountRepository>();
-            services.AddScoped<Application.Repositories.ILocalAccountRepository, Infrastructure.Repositories.LocalAccountRepository>();
-
-            // Application services implemented here
-            services.AddScoped<Application.Services.IAuthenticationService, Application.Services.AuthenticationService>();
-            services.AddScoped<Application.Services.ILocalAuthService, Application.Services.LocalAuthenticationService>();
+            services.AddScoped<IUserRepository, UserRepository>();
+            services.AddScoped<IRoleRepository, RoleRepository>();
+            services.AddScoped<IProviderRepository, ProviderRepository>();
+            services.AddScoped<IOAuthAccountRepository, OAuthAccountRepository>();
+            services.AddScoped<ILocalAccountRepository, LocalAccountRepository>();
 
             return services;
         }

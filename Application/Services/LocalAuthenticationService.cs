@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
-using Application.Repositories;
+using Application.Interfaces;
 using Domain.Entities;
 using Domain.Request;
+using Infrastructure.Repositories;
 using Konscious.Security.Cryptography;
 
 namespace Application.Services
@@ -12,11 +13,13 @@ namespace Application.Services
     {
         private readonly IUserRepository _users;
         private readonly ILocalAccountRepository _localAccounts;
+        private readonly IRoleService _roleService;
 
-        public LocalAuthenticationService(IUserRepository users, ILocalAccountRepository localAccounts)
+        public LocalAuthenticationService(IUserRepository users, ILocalAccountRepository localAccounts, Application.Interfaces.IRoleService roleService)
         {
             _users = users;
             _localAccounts = localAccounts;
+            _roleService = roleService;
         }
 
         public async Task<User> SignupAsync(SignupRequest request)
@@ -75,6 +78,7 @@ namespace Application.Services
             };
 
             await _localAccounts.AddAsync(local);
+            await _roleService.AssignRoleAsync(user.Id, "user");
 
             return user;
         }

@@ -1,5 +1,3 @@
-using System.Threading.Tasks;
-using Application.Repositories;
 using Domain.Entities;
 using Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;

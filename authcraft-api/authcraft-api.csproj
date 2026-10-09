@@ -18,7 +18,8 @@
     </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="10.0.0" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.7.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.2" />
     <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
   </ItemGroup>
 

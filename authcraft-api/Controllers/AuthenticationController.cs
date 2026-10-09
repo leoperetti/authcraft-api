@@ -10,6 +10,7 @@ using System.Text;
 using Domain.Response;
 using Domain.Request;
 using Domain.Dto;
+using Application.Interfaces;
 
 namespace authcraft_api.Controllers
 {
@@ -18,14 +19,16 @@ namespace authcraft_api.Controllers
     public class AuthenticationController : ControllerBase
     {
         private readonly IConfiguration _configuration;
-        private readonly Application.Services.IAuthenticationService _authService;
-        private readonly Application.Services.ILocalAuthService _localAuthService;
+        private readonly Application.Interfaces.IAuthenticationService _authService;
+        private readonly ILocalAuthService _localAuthService;
+        private readonly Application.Interfaces.IRoleService _roleService;
 
-        public AuthenticationController(IConfiguration configuration, Application.Services.IAuthenticationService authService, Application.Services.ILocalAuthService localAuthService)
+        public AuthenticationController(IConfiguration configuration, Application.Interfaces.IAuthenticationService authService, ILocalAuthService localAuthService, Application.Interfaces.IRoleService roleService)
         {
             _configuration = configuration;
             _authService = authService;
             _localAuthService = localAuthService;
+            _roleService = roleService;
         }
 
         private string GetJwtKey()
@@ -44,7 +47,6 @@ namespace authcraft_api.Controllers
             }
             catch (InvalidOperationException ex)
             {
-                // Conflicto, por ejemplo usuario ya existe
                 return Conflict(new { message = ex.Message });
             }
             catch (Exception)
@@ -107,7 +109,7 @@ namespace authcraft_api.Controllers
                 return BadRequest("Emisor del token inválido");
 
             // Delegate business logic to Application service
-            var info = new Application.Services.GoogleAuthInfo(
+            var info = new GoogleAuthInfo(
                 payload.Subject ?? string.Empty,
                 payload.Email,
                 payload.EmailVerified == true,
@@ -141,10 +143,17 @@ namespace authcraft_api.Controllers
 
             var tokenClaims = new List<Claim>
             {
-                new Claim(JwtRegisteredClaimNames.Sub, payload.Subject ?? string.Empty),
+                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
                 new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
             };
+
+            // Añadir claims de roles del usuario si existen
+            var roles = await _roleService.GetRolesAsync(user.Id);
+            foreach (var rn in roles)
+            {
+                tokenClaims.Add(new Claim(ClaimTypes.Role, rn));
+            }
 
             var expires = DateTime.UtcNow.AddHours(10);
             var token = new JwtSecurityToken(

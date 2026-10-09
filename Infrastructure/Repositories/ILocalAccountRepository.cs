@@ -1,7 +1,6 @@
-using System.Threading.Tasks;
 using Domain.Entities;
 
-namespace Application.Repositories
+namespace Infrastructure.Repositories
 {
     public interface ILocalAccountRepository
     {

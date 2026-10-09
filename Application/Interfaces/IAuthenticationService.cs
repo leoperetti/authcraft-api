@@ -2,7 +2,7 @@ using Domain.Entities;
 using Domain.Request;
 using Domain.Response;
 
-namespace Application.Services
+namespace Application.Interfaces
 {
     public record GoogleAuthInfo(string Subject, string? Email, bool EmailVerified, string? Name, string? Picture, string? HostedDomain);
 
