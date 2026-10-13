@@ -12,46 +12,46 @@ namespace Infrastructure.Repositories
         public async Task<Role?> GetByNameAsync(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            return await _db.Roles.SingleOrDefaultAsync(r => r.Name == name);
+            return await _db.Roles.SingleOrDefaultAsync(role => role.Name == name);
         }
 
         public async Task<Role?> GetByIdAsync(int id) => await _db.Roles.FindAsync(id);
 
-        public async Task AddAsync(Role role)
+        public Task AddAsync(Role role)
         {
             _db.Roles.Add(role);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
 
-        public async Task AddUserRoleAsync(UserRole userRole)
+        public Task AddMembershipRoleAsync(MembershipRole membershipRole)
         {
-            _db.UsersRoles.Add(userRole);
-            await _db.SaveChangesAsync();
+            _db.MembershipRoles.Add(membershipRole);
+            return Task.CompletedTask;
         }
 
-        public async Task RemoveUserRoleAsync(UserRole userRole)
+        public Task RemoveMembershipRoleAsync(MembershipRole membershipRole)
         {
-            _db.UsersRoles.Remove(userRole);
-            await _db.SaveChangesAsync();
+            _db.MembershipRoles.Remove(membershipRole);
+            return Task.CompletedTask;
         }
 
-        public async Task<bool> UserHasRoleAsync(long userId, int roleId)
+        public async Task<bool> IdentityHasRoleAsync(long identityId, int roleId)
         {
-            return await _db.UsersRoles.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId);
+            return await _db.MembershipRoles.AnyAsync(membershipRole => membershipRole.MembershipId == identityId && membershipRole.RoleId == roleId);
         }
 
-        public async Task<IList<string>> GetRolesByUserIdAsync(long userId)
+        public async Task<IList<string>> GetRolesByIdentityIdAsync(long identityId)
         {
-            return await _db.UsersRoles
-                .Where(ur => ur.UserId == userId)
-                .Select(ur => ur.Role.Name)
+            return await _db.MembershipRoles
+                .Where(membershipRole => membershipRole.MembershipId == identityId)
+                .Select(membershipRole => membershipRole.Role.Name)
                 .ToListAsync();
         }
 
         public async Task<IList<string>> GetAllRolesAsync()
         {
             return await _db.Roles
-                .Select(r => r.Name)
+                .Select(role => role.Name)
                 .ToListAsync();
         }
 

@@ -24,6 +24,4 @@ namespace authcraft_api.Controllers
             return Ok(roles);
         }
     }
-
-    public record AssignRoleDto(long UserId, string RoleName);
 }

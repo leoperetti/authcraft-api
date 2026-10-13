@@ -4,41 +4,41 @@ using Domain.Entities;
 
 namespace Infrastructure.Data.Configurations
 {
-    public class UserConfiguration : IEntityTypeConfiguration<User>
+    public class IdentiyConfiguration : IEntityTypeConfiguration<Identity>
     {
-        public void Configure(EntityTypeBuilder<User> builder)
+        public void Configure(EntityTypeBuilder<Identity> builder)
         {
-            builder.ToTable("users");
+            builder.ToTable("identities");
 
-            builder.HasKey(u => u.Id).HasName("PK_users");
-            builder.Property(u => u.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            builder.HasKey(user => user.Id).HasName("PK_identities");
+            builder.Property(user => user.Id).HasColumnName("id").ValueGeneratedOnAdd();
 
-            builder.Property(u => u.Email)
+            builder.Property(user => user.Email)
                 .IsRequired()
                 .HasMaxLength(320)
                 .HasColumnName("email");
 
-            builder.Property(u => u.PhoneNumber)
+            builder.Property(user => user.PhoneNumber)
                 .HasMaxLength(20)
                 .HasColumnName("phone_number");
 
-            builder.Property(u => u.Name)
+            builder.Property(user => user.Name)
                 .HasMaxLength(200)
                 .HasColumnName("name");
 
-            builder.Property(u => u.Picture)
+            builder.Property(user => user.Picture)
                 .HasMaxLength(1000)
                 .HasColumnName("picture");
 
-            builder.Property(u => u.CreatedAt)
+            builder.Property(user => user.CreatedAt)
                 .HasColumnName("created_at")
                 .HasDefaultValueSql("SYSUTCDATETIME()");
 
-            builder.Property(u => u.UpdatedAt)
+            builder.Property(user => user.UpdatedAt)
                 .HasColumnName("updated_at")
                 .HasDefaultValueSql("SYSUTCDATETIME()");
 
-            builder.HasIndex(u => u.Email).HasDatabaseName("IX_users_email");
+            builder.HasIndex(user => user.Email).HasDatabaseName("IX_identities_email");
         }
     }
 }

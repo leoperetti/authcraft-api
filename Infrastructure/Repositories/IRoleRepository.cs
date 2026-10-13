@@ -9,10 +9,10 @@ namespace Infrastructure.Repositories
         Task<Role?> GetByNameAsync(string name);
         Task<Role?> GetByIdAsync(int id);
         Task AddAsync(Role role);
-        Task AddUserRoleAsync(UserRole userRole);
-        Task RemoveUserRoleAsync(UserRole userRole);
-        Task<bool> UserHasRoleAsync(long userId, int roleId);
-        Task<IList<string>> GetRolesByUserIdAsync(long userId);
+        Task AddMembershipRoleAsync(MembershipRole membershipRole);
+        Task RemoveMembershipRoleAsync(MembershipRole membershipRole);
+        Task<bool> IdentityHasRoleAsync(long identityId, int roleId);
+        Task<IList<string>> GetRolesByIdentityIdAsync(long identityId);
         Task<IList<string>> GetAllRolesAsync();
         Task<List<Role>> GetRolesAsync();
     }

@@ -1,9 +1,12 @@
 using Azure.Identity;
 using Infrastructure;
 using Application;
+using authcraft_api.Bootstrap;
+using authcraft_api.Cors;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Security.Claims;
@@ -39,6 +42,8 @@ public partial class Program
 
         builder.Services.AddInfrastructure(builder.Configuration, connectionStringFromKeyVault);
         builder.Services.AddApplicationDependencies();
+        builder.Services.Configure<SuperadminBootstrapOptions>(builder.Configuration.GetSection("SuperadminBootstrap"));
+        builder.Services.AddScoped<SuperadminBootstrapper>();
 
         builder.Services.AddControllers();
 
@@ -76,6 +81,7 @@ public partial class Program
                 IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
                 ValidateIssuer = !string.IsNullOrEmpty(jwtIssuer),
                 ValidIssuer = string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
+                ValidateLifetime = true,
                 ValidateAudience = !string.IsNullOrEmpty(jwtAudience),
                 ValidAudience = string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,
                 NameClaimType = ClaimTypes.Name,
@@ -93,13 +99,28 @@ public partial class Program
             });
         }
 
-        builder.Services.AddAuthorization();
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy("SuperadminOnly", policy =>
+                policy.RequireAuthenticatedUser()
+                  .RequireRole("superadmin"));
+        });
 
         builder.Services.AddOpenApi();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddCors();
+        builder.Services.AddSingleton<ICorsPolicyProvider, TenantCorsPolicyProvider>();
+        builder.Services.AddScoped<TenantOriginValidationMiddleware>();
 
         var app = builder.Build();
+
+        using (var scope = app.Services.CreateScope())
+        {
+            var bootstrapper = scope.ServiceProvider.GetRequiredService<SuperadminBootstrapper>();
+            bootstrapper.BootstrapAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
 
         if (app.Environment.IsDevelopment())
         {
@@ -110,6 +131,8 @@ public partial class Program
         app.UseHttpsRedirection();
 
         app.UseAuthentication();
+        app.UseMiddleware<TenantOriginValidationMiddleware>();
+        app.UseCors();
         app.UseAuthorization();
 
         app.MapControllers();

@@ -9,21 +9,21 @@ namespace Infrastructure.Repositories
         private readonly AppDbContext _db;
         public LocalAccountRepository(AppDbContext db) => _db = db;
 
-        public async Task<LocalAccount?> GetByUserIdAsync(long userId)
+        public async Task<LocalAccount?> GetByIdentityIdAsync(long identityId)
         {
-            return await _db.Set<LocalAccount>().Include(l => l.User).SingleOrDefaultAsync(l => l.UserId == userId);
+            return await _db.Set<LocalAccount>().Include(localAccount => localAccount.Identity).SingleOrDefaultAsync(localAccount => localAccount.IdentityId == identityId);
         }
 
-        public async Task AddAsync(LocalAccount localAccount)
+        public Task AddAsync(LocalAccount localAccount)
         {
             _db.Set<LocalAccount>().Add(localAccount);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
 
-        public async Task UpdateAsync(LocalAccount localAccount)
+        public Task UpdateAsync(LocalAccount localAccount)
         {
             _db.Set<LocalAccount>().Update(localAccount);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
     }
 }

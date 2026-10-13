@@ -13,7 +13,7 @@ namespace Infrastructure.Data.Configurations
             builder.HasKey(o => o.Id).HasName("PK_oauth_accounts");
             builder.Property(o => o.Id).HasColumnName("id").ValueGeneratedOnAdd();
 
-            builder.Property(o => o.UserId).HasColumnName("user_id");
+            builder.Property(oauthAccount => oauthAccount.IdentityId).HasColumnName("identity_id");
             builder.Property(o => o.ProviderId).HasColumnName("provider_id");
 
             builder.Property(o => o.ProviderUserId)
@@ -49,17 +49,17 @@ namespace Infrastructure.Data.Configurations
                 .HasColumnName("updated_at")
                 .HasDefaultValueSql("SYSUTCDATETIME()");
 
-            builder.HasIndex(o => o.UserId).HasDatabaseName("IX_oauth_accounts_user");
+            builder.HasIndex(oauthAccount => oauthAccount.IdentityId).HasDatabaseName("IX_oauth_accounts_identity");
             builder.HasIndex(o => o.ProviderUserId).HasDatabaseName("IX_oauth_accounts_provideruserid");
 
             builder.HasIndex(o => new { o.ProviderId, o.ProviderUserId })
                 .IsUnique()
                 .HasDatabaseName("UQ_oauth_accounts_provider_provideruserid");
 
-            builder.HasOne(o => o.User)
-                .WithMany(u => u.OAuthAccounts)
-                .HasForeignKey(o => o.UserId)
-                .HasConstraintName("FK_oauth_accounts_user")
+            builder.HasOne(oauthAccount => oauthAccount.Identity)
+                .WithMany(identity => identity.OAuthAccounts)
+                .HasForeignKey(oauthAccount => oauthAccount.IdentityId)
+                .HasConstraintName("FK_oauth_accounts_identity")
                 .OnDelete(DeleteBehavior.Cascade);
 
             builder.HasOne(o => o.Provider)

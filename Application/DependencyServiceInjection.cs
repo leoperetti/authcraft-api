@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Application.Interfaces;
+using Application.Audit;
+using Application.Services;
 
 namespace Application
 {
@@ -7,10 +9,12 @@ namespace Application
     {
         public static IServiceCollection AddApplicationDependencies(this IServiceCollection services)
         {
-            services.AddScoped<IAuthenticationService, Services.AuthenticationService>();
-            services.AddScoped<ILocalAuthService, Services.LocalAuthenticationService>();
-            services.AddScoped<IRoleService, Services.RoleService>(); 
-            services.AddScoped<IUserService, Services.UserService>();
+            services.AddScoped<IAuthenticationService, AuthenticationService>();
+            services.AddScoped<ILocalAuthService, LocalAuthenticationService>();
+            services.AddScoped<IRoleService, RoleService>();
+            services.AddScoped<ITenantService, TenantService>();
+            services.AddScoped<IUserService, UserService>();
+            services.AddScoped<IAuditService, AuditService>();
 
             return services;
         }

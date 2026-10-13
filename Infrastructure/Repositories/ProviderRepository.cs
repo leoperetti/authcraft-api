@@ -14,10 +14,10 @@ namespace Infrastructure.Repositories
             return await _db.Providers.SingleOrDefaultAsync(p => p.Name == name);
         }
 
-        public async Task AddAsync(Provider provider)
+        public Task AddAsync(Provider provider)
         {
             _db.Providers.Add(provider);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
     }
 }

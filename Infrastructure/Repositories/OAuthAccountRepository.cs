@@ -11,20 +11,20 @@ namespace Infrastructure.Repositories
 
         public async Task<OAuthAccount?> GetByProviderAndProviderUserIdAsync(int providerId, string providerUserId)
         {
-            return await _db.OAuthAccounts.Include(o => o.User).
-                SingleOrDefaultAsync(o => o.ProviderId == providerId && o.ProviderUserId == providerUserId);
+            return await _db.OAuthAccounts.Include(oauthAccount => oauthAccount.Identity)
+                .SingleOrDefaultAsync(oauthAccount => oauthAccount.ProviderId == providerId && oauthAccount.ProviderUserId == providerUserId);
         }
 
-        public async Task AddAsync(OAuthAccount oauth)
+        public Task AddAsync(OAuthAccount oauth)
         {
             _db.OAuthAccounts.Add(oauth);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
 
-        public async Task UpdateAsync(OAuthAccount oauth)
+        public Task UpdateAsync(OAuthAccount oauth)
         {
             _db.OAuthAccounts.Update(oauth);
-            await _db.SaveChangesAsync();
+            return Task.CompletedTask;
         }
     }
 }

@@ -6,7 +6,7 @@ namespace Domain.Entities
     {
         public long Id { get; set; }
 
-        public long UserId { get; set; }
+        public long IdentityId { get; set; }
         public int ProviderId { get; set; }
         public string ProviderUserId { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
@@ -19,7 +19,7 @@ namespace Domain.Entities
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
 
-        public User? User { get; set; }
+        public Identity? Identity { get; set; }
         public Provider? Provider { get; set; }
     }
 }

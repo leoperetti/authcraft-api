@@ -7,4 +7,32 @@
     <Property Name="ParentElementType" Value="SqlTable" />
     <Property Name="NewName" Value="id" />
   </Operation>
+  <Operation Name="Rename Refactor" Key="93eb6993-8eef-4412-a0bc-93e8a7a256b4" ChangeDateTime="10/13/2026 12:43:32">
+    <Property Name="ElementName" Value="[dbo].[tenant_api_keys].[Id]" />
+    <Property Name="ElementType" Value="SqlSimpleColumn" />
+    <Property Name="ParentElementName" Value="[dbo].[tenant_api_keys]" />
+    <Property Name="ParentElementType" Value="SqlTable" />
+    <Property Name="NewName" Value="id" />
+  </Operation>
+  <Operation Name="Rename Refactor" Key="732ed41e-5155-4007-a1ea-74294052d859" ChangeDateTime="10/13/2026 12:46:07">
+    <Property Name="ElementName" Value="[dbo].[memberships].[Id]" />
+    <Property Name="ElementType" Value="SqlSimpleColumn" />
+    <Property Name="ParentElementName" Value="[dbo].[memberships]" />
+    <Property Name="ParentElementType" Value="SqlTable" />
+    <Property Name="NewName" Value="identity_id" />
+  </Operation>
+  <Operation Name="Rename Refactor" Key="ec7b9504-2b2d-4901-acc8-69482f6c00d6" ChangeDateTime="10/13/2026 13:37:41">
+    <Property Name="ElementName" Value="[dbo].[oauth_accounts].[user_id]" />
+    <Property Name="ElementType" Value="SqlSimpleColumn" />
+    <Property Name="ParentElementName" Value="[dbo].[oauth_accounts]" />
+    <Property Name="ParentElementType" Value="SqlTable" />
+    <Property Name="NewName" Value="identity_id" />
+  </Operation>
+  <Operation Name="Rename Refactor" Key="28f3588f-e36b-4d7a-ae90-679624087c8f" ChangeDateTime="10/13/2026 13:37:53">
+    <Property Name="ElementName" Value="[dbo].[local_accounts].[user_id]" />
+    <Property Name="ElementType" Value="SqlSimpleColumn" />
+    <Property Name="ParentElementName" Value="[dbo].[local_accounts]" />
+    <Property Name="ParentElementType" Value="SqlTable" />
+    <Property Name="NewName" Value="identity_id" />
+  </Operation>
 </Operations>

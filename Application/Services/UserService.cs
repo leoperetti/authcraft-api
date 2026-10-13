@@ -1,4 +1,6 @@
-﻿using Application.Interfaces;
+﻿using Application.Audit;
+using Application.Interfaces;
+using Domain.Audit;
 using Domain.Entities;
 using Infrastructure.Repositories;
 using System.ComponentModel.DataAnnotations;
@@ -7,55 +9,95 @@ namespace Application.Services
 {
     public class UserService : IUserService
     {
-        private readonly IUserRepository _users;
+        private readonly IIdentityRepository _identities;
         private readonly IRoleRepository _roles;
-        public UserService(IUserRepository users, IRoleRepository roles)
+        private readonly IAuditService _audit;
+        private readonly IUnitOfWork _unitOfWork;
+
+        public UserService(IIdentityRepository identities, IRoleRepository roles, IAuditService audit, IUnitOfWork unitOfWork)
         {
-            _users = users;
+            _identities = identities;
             _roles = roles;
+            _audit = audit;
+            _unitOfWork = unitOfWork;
         }
-        public async Task AssignRolesAsync(long userId, IEnumerable<string> roles, CancellationToken ct = default)
+
+        public async Task AssignRolesAsync(long identityId, IEnumerable<string> roles, CancellationToken ct = default)
         {
-            var user = await _users.GetByIdWithRolesAsync(userId)
-                   ?? throw new NotFoundException($"Usuario {userId} no encontrado.");
+            var identity = await _identities.GetByIdWithRolesAsync(identityId)
+                   ?? throw new NotFoundException($"Identity {identityId} no encontrada.");
 
-            // Normalizar: sin vacíos, sin duplicados, sin distinguir mayúsculas
             var requested = roles
-                .Where(r => !string.IsNullOrWhiteSpace(r))
-                .Select(r => r.Trim())
+                .Where(role => !string.IsNullOrWhiteSpace(role))
+                .Select(role => role.Trim())
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // Validar que todos los roles pedidos existan
-            var found = await _roles.GetRolesAsync();
-            var missing = requested.Except(found.Select(r => r.Name), StringComparer.OrdinalIgnoreCase).ToList();
-            if (missing.Count > 0)
-                throw new ValidationException($"Roles inexistentes: {string.Join(", ", missing)}");
+            var foundRoles = await _roles.GetRolesAsync();
+            var missingRoles = requested.Except(foundRoles.Select(role => role.Name), StringComparer.OrdinalIgnoreCase).ToList();
+            if (missingRoles.Count > 0)
+                throw new ValidationException($"Roles inexistentes: {string.Join(", ", missingRoles)}");
 
-            var current = user.UserRoles
-                .Select(ur => ur.Role.Name)
+            var currentRoles = identity.Memberships
+                .Select(membership => membership.Role.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var toAdd = requested.Except(current, StringComparer.OrdinalIgnoreCase).ToList();
-            var toRemove = current.Except(requested, StringComparer.OrdinalIgnoreCase).ToList();
+            var rolesToAdd = requested.Except(currentRoles, StringComparer.OrdinalIgnoreCase).ToList();
+            var rolesToRemove = currentRoles.Except(requested, StringComparer.OrdinalIgnoreCase).ToList();
 
-            if (toAdd.Count == 0 && toRemove.Count == 0)
-                return; // nada que cambiar
+            if (rolesToAdd.Count == 0 && rolesToRemove.Count == 0)
+                return;
 
-            foreach (var role in found.Where(r => toAdd.Contains(r.Name, StringComparer.OrdinalIgnoreCase)))
-                user.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id });
-
-            var rolesToRemove = new List<UserRole>();
-            if (toRemove.Count > 0)
+            foreach (var role in foundRoles.Where(foundRole => rolesToAdd.Contains(foundRole.Name, StringComparer.OrdinalIgnoreCase)))
             {
-                rolesToRemove = user.UserRoles
-                .Where(ur => toRemove.Contains(ur.Role.Name, StringComparer.OrdinalIgnoreCase))
-                .ToList();
+                var existingMembership = identity.Memberships.FirstOrDefault(membership => membership.TenantId == role.TenantId);
+                if (existingMembership == null)
+                {
+                    identity.Memberships.Add(new Membership
+                    {
+                        IdentityId = identity.Id,
+                        TenantId = role.TenantId,
+                        Status = "active",
+                        RoleId = role.Id,
+                        CreatedAt = DateTimeOffset.UtcNow,
+                        UpdatedAt = DateTimeOffset.UtcNow
+                    });
+                    continue;
+                }
+
+                existingMembership.RoleId = role.Id;
+                existingMembership.UpdatedAt = DateTimeOffset.UtcNow;
             }
 
-            foreach (var ur in rolesToRemove)
-                user.UserRoles.Remove(ur);
+            var membershipsToRemove = identity.Memberships
+                .Where(membership => rolesToRemove.Contains(membership.Role.Name, StringComparer.OrdinalIgnoreCase))
+                .ToList();
 
-            await _users.UpdateAsync(user);
+            foreach (var membership in membershipsToRemove)
+                identity.Memberships.Remove(membership);
+
+            await _identities.UpdateAsync(identity);
+
+            await _audit.LogAsync(new AuditEntry
+            {
+                Action = AuditActions.AssignRoles,
+                EntityType = "Identity",
+                EntityId = identity.Id.ToString(),
+                OldValues = new { Roles = currentRoles.OrderBy(role => role).ToArray() },
+                NewValues = new { Roles = requested.OrderBy(role => role).ToArray() },
+                Success = true
+            }, ct);
+
+            await _unitOfWork.SaveChangesAsync(ct);
+        }
+
+        public async Task<IEnumerable<Identity>> GetAllWithRolesAsync()
+        {
+            return await _identities.GetAllWithRolesAsync();
+        }
+
+        public async Task<Identity> GetByIdWithRolesAsync(long id)
+        {
+            return await _identities.GetByIdWithRolesAsync(id);
         }
     }
 }

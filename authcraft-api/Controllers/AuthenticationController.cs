@@ -7,10 +7,12 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Application.Audit;
+using Application.Interfaces;
+using Domain.Audit;
 using Domain.Response;
 using Domain.Request;
 using Domain.Dto;
-using Application.Interfaces;
 
 namespace authcraft_api.Controllers
 {
@@ -21,14 +23,16 @@ namespace authcraft_api.Controllers
         private readonly IConfiguration _configuration;
         private readonly Application.Interfaces.IAuthenticationService _authService;
         private readonly ILocalAuthService _localAuthService;
-        private readonly Application.Interfaces.IRoleService _roleService;
+        private readonly IRoleService _roleService;
+        private readonly IAuditService _auditService;
 
-        public AuthenticationController(IConfiguration configuration, Application.Interfaces.IAuthenticationService authService, ILocalAuthService localAuthService, Application.Interfaces.IRoleService roleService)
+        public AuthenticationController(IConfiguration configuration, Application.Interfaces.IAuthenticationService authService, ILocalAuthService localAuthService, IRoleService roleService, IAuditService auditService)
         {
             _configuration = configuration;
             _authService = authService;
             _localAuthService = localAuthService;
             _roleService = roleService;
+            _auditService = auditService;
         }
 
         private string GetJwtKey()
@@ -42,8 +46,8 @@ namespace authcraft_api.Controllers
         {
             try
             {
-                var user = await _localAuthService.SignupAsync(request);
-                return Ok(new { message = "Registro exitoso", email = user.Email });
+                var identity = await _localAuthService.SignupAsync(request);
+                return Ok(new { message = "Registro exitoso", email = identity.Email });
             }
             catch (InvalidOperationException ex)
             {
@@ -69,6 +73,16 @@ namespace authcraft_api.Controllers
             }
             catch (InvalidOperationException ex)
             {
+                await _auditService.LogIndependentAsync(new AuditEntry
+                {
+                    Action = AuditActions.LoginFailed,
+                    EntityType = "Identity",
+                    EntityId = null,
+                    NewValues = new { request.Identifier },
+                    Success = false,
+                    FailureReason = ex.Message
+                });
+
                 return Unauthorized(new { message = ex.Message });
             }
             catch (Exception)
@@ -117,7 +131,7 @@ namespace authcraft_api.Controllers
                 payload.Picture,
                 payload.HostedDomain);
 
-            var (user, oauth) = await _authService.UpsertFromGoogleAsync(info);
+            var (identityRecord, oauth) = await _authService.UpsertFromGoogleAsync(info);
 
             // Crear ClaimsPrincipal para la sesión
             var claims = new List<Claim>
@@ -143,13 +157,13 @@ namespace authcraft_api.Controllers
 
             var tokenClaims = new List<Claim>
             {
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+                new Claim(JwtRegisteredClaimNames.Sub, identityRecord.Id.ToString()),
                 new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
             };
 
             // Añadir claims de roles del usuario si existen
-            var roles = await _roleService.GetRolesAsync(user.Id);
+            var roles = await _roleService.GetRolesAsync(identityRecord.Id);
             foreach (var rn in roles)
             {
                 tokenClaims.Add(new Claim(ClaimTypes.Role, rn));

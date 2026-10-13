@@ -13,13 +13,13 @@ namespace Infrastructure.Data.Configurations
             builder.HasKey(l => l.Id).HasName("PK_local_accounts");
             builder.Property(l => l.Id).HasColumnName("id").ValueGeneratedOnAdd();
 
-            builder.Property(l => l.UserId).HasColumnName("user_id");
+            builder.Property(localAccount => localAccount.IdentityId).HasColumnName("identity_id");
 
             builder.Property(l => l.PasswordHash).HasColumnName("password_hash");
             builder.Property(l => l.Salt).HasColumnName("salt");
 
-            builder.Property(l => l.Algorithm)
-                .HasMaxLength(200)
+            builder.Property(localAccount => localAccount.Algorithm)
+                .HasMaxLength(400)
                 .HasColumnName("algorithm");
 
             builder.Property(l => l.CreatedAt)
@@ -30,12 +30,13 @@ namespace Infrastructure.Data.Configurations
                 .HasColumnName("updated_at")
                 .HasDefaultValueSql("SYSUTCDATETIME()");
 
-            builder.HasIndex(l => l.UserId).IsUnique().HasDatabaseName("UQ_local_accounts_userid");
+            builder.HasIndex(localAccount => localAccount.IdentityId).IsUnique().HasDatabaseName("UQ_local_accounts_identity");
+            builder.HasIndex(localAccount => localAccount.IdentityId).HasDatabaseName("IX_local_accounts_identity");
 
-            builder.HasOne(l => l.User)
+            builder.HasOne(localAccount => localAccount.Identity)
                 .WithMany()
-                .HasForeignKey(l => l.UserId)
-                .HasConstraintName("FK_local_accounts_user")
+                .HasForeignKey(localAccount => localAccount.IdentityId)
+                .HasConstraintName("FK_local_accounts_identity")
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }

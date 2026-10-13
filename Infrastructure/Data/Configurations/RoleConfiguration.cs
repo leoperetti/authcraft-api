@@ -10,11 +10,30 @@ namespace Infrastructure.Data.Configurations
         {
             builder.ToTable("roles");
 
-            builder.HasKey(r => r.Id);
-            builder.Property(r => r.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            builder.HasKey(role => role.Id);
+            builder.Property(role => role.Id).HasColumnName("id").ValueGeneratedOnAdd();
 
-            builder.Property(r => r.Name).HasColumnName("name").HasMaxLength(50).IsRequired();
-            builder.HasIndex(r => r.Name).IsUnique();
+            builder.Property(role => role.TenantId)
+                .HasColumnName("tenant_id")
+                .IsRequired();
+
+            builder.Property(role => role.Name)
+                .HasColumnName("name")
+                .HasMaxLength(50)
+                .IsRequired();
+
+            builder.HasIndex(role => new { role.TenantId, role.Name })
+                .IsUnique()
+                .HasDatabaseName("UQ_roles_name");
+
+            builder.HasAlternateKey(role => new { role.Id, role.TenantId })
+                .HasName("UQ_roles_id_tenant");
+
+            builder.HasOne(role => role.Tenant)
+                .WithMany(tenant => tenant.Roles)
+                .HasForeignKey(role => role.TenantId)
+                .HasConstraintName("FK_roles_tenants")
+                .OnDelete(DeleteBehavior.NoAction);
         }
     }
 }

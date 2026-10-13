@@ -6,7 +6,7 @@ namespace Application.Interfaces
 {
     public interface ILocalAuthService
     {
-        Task<User> SignupAsync(SignupRequest request);
+        Task<Identity> SignupAsync(SignupRequest request);
         Task<bool> VerifyPasswordAsync(string password, Domain.Entities.LocalAccount localAccount);
     }
 }

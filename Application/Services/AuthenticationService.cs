@@ -14,25 +14,27 @@ namespace Application.Services
     public class AuthenticationService : IAuthenticationService
     {
         private readonly IProviderRepository _providers;
-        private readonly IUserRepository _users;
+        private readonly IIdentityRepository _identities;
         private readonly IOAuthAccountRepository _oauths;
         private readonly ILocalAccountRepository _localAccounts;
         private readonly ILocalAuthService _localAuthService;
         private readonly IRoleRepository _roles;
         private readonly IRoleService _roleService;
+        private readonly IUnitOfWork _unitOfWork;
 
-        public AuthenticationService(IProviderRepository providers, IUserRepository users, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleRepository roles, IRoleService roleService)
+        public AuthenticationService(IProviderRepository providers, IIdentityRepository identities, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleRepository roles, IRoleService roleService, IUnitOfWork unitOfWork)
         {
             _providers = providers;
-            _users = users;
+            _identities = identities;
             _oauths = oauths;
             _localAccounts = localAccounts;
             _localAuthService = localAuthService;
             _roles = roles;
             _roleService = roleService;
+            _unitOfWork = unitOfWork;
         }
 
-        public async Task<(User user, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info)
+        public async Task<(Identity identity, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info)
         {
             var providerName = "google";
             var provider = await _providers.GetByNameAsync(providerName);
@@ -43,7 +45,6 @@ namespace Application.Services
             }
 
             var providerUserId = info.Subject ?? string.Empty;
-
             var oauth = await _oauths.GetByProviderAndProviderUserIdAsync(provider.Id, providerUserId);
 
             if (oauth != null)
@@ -55,13 +56,15 @@ namespace Application.Services
                 oauth.UpdatedAt = DateTimeOffset.UtcNow;
 
                 await _oauths.UpdateAsync(oauth);
-                return (oauth.User ?? throw new InvalidOperationException("OAuthAccount has no related User"), oauth);
+                await _unitOfWork.SaveChangesAsync();
+                return (oauth.Identity ?? throw new InvalidOperationException("OAuthAccount has no related Identity"), oauth);
             }
 
-            var user = await _users.GetByEmailAsync(info.Email);
-            if (user == null)
+            var identity = await _identities.GetByEmailAsync(info.Email);
+            bool isNewIdentity = identity == null;
+            if (isNewIdentity)
             {
-                user = new User
+                identity = new Identity
                 {
                     Email = info.Email ?? string.Empty,
                     Name = info.Name,
@@ -69,13 +72,13 @@ namespace Application.Services
                     CreatedAt = DateTimeOffset.UtcNow,
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
-                await _users.AddAsync(user);
+                await _identities.AddAsync(identity);
             }
 
             var newOauth = new OAuthAccount
             {
-                UserId = user.Id,
-                ProviderId = provider.Id,
+                Identity = identity,
+                Provider = provider,
                 ProviderUserId = providerUserId,
                 Email = info.Email ?? string.Empty,
                 EmailVerified = info.EmailVerified,
@@ -86,22 +89,28 @@ namespace Application.Services
             };
 
             await _oauths.AddAsync(newOauth);
-            await _roleService.AssignRoleAsync(user.Id, "user");
 
-            return (user, newOauth);
+            if (isNewIdentity)
+            {
+                await _roleService.AssignRoleAsync(identity, "user");
+            }
+
+            await _unitOfWork.SaveChangesAsync();
+
+            return (identity, newOauth);
         }
 
         public async Task<AuthResponse> LoginWithPasswordAsync(LoginRequest request, string jwtKey, string? jwtIssuer, string? jwtAudience)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
 
-            var user = await _users.GetByEmailAsync(request.Identifier);
-            if (user == null) throw new InvalidOperationException("Credenciales inválidas");
+            var identity = await _identities.GetByEmailWithMembershipsAsync(request.Identifier);
+            if (identity == null) throw new InvalidOperationException("Credenciales inválidas");
 
-            var local = await _localAccounts.GetByUserIdAsync(user.Id);
-            if(user != null && local == null) throw new InvalidOperationException("Ya existe una cuenta con ese email, inicia sesión con Google");
+            var localAccount = await _localAccounts.GetByIdentityIdAsync(identity.Id);
+            if (localAccount == null) throw new InvalidOperationException("Ya existe una cuenta con ese email, inicia sesión con Google");
 
-            var valid = await _localAuthService.VerifyPasswordAsync(request.Password, local);
+            var valid = await _localAuthService.VerifyPasswordAsync(request.Password, localAccount);
             if (!valid) throw new InvalidOperationException("Credenciales inválidas");
 
             var tokenHandler = new JwtSecurityTokenHandler();
@@ -110,19 +119,30 @@ namespace Application.Services
 
             var tokenClaims = new List<Claim>
             {
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-                new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
-                new Claim(ClaimTypes.Name, user.Name ?? string.Empty),
+                new Claim(JwtRegisteredClaimNames.Sub, identity.Id.ToString()),
+                new Claim(ClaimTypes.Email, identity.Email ?? string.Empty),
+                new Claim(ClaimTypes.Name, identity.Name ?? string.Empty),
             };
 
-            // Añadir claims de roles
-            var roleNames = await _roles.GetRolesByUserIdAsync(user.Id);
-            foreach (var rn in roleNames)
+            var roleNames = await _roles.GetRolesByIdentityIdAsync(identity.Id);
+            foreach (var roleName in roleNames)
             {
-                tokenClaims.Add(new Claim(ClaimTypes.Role, rn));
+                tokenClaims.Add(new Claim(ClaimTypes.Role, roleName));
             }
 
-            var expires = DateTime.UtcNow.AddHours(100);
+            var tenantClientId = identity.Memberships
+                .Where(membership => membership.Tenant != null)
+                .OrderByDescending(membership => string.Equals(membership.Status, "active", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(membership => membership.TenantId)
+                .Select(membership => membership.Tenant.ClientId)
+                .FirstOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(tenantClientId))
+            {
+                tokenClaims.Add(new Claim("tenant", tenantClientId));
+            }
+
+            var expires = DateTime.UtcNow.AddHours(24);
             var token = new JwtSecurityToken(
                 issuer: string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
                 audience: string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,
@@ -133,14 +153,14 @@ namespace Application.Services
 
             var tokenString = tokenHandler.WriteToken(token);
 
-            var names = (user.Name ?? string.Empty).Split(' ', 2, StringSplitOptions.TrimEntries);
+            var names = (identity.Name ?? string.Empty).Split(' ', 2, StringSplitOptions.TrimEntries);
             var firstName = names.Length > 0 ? names[0] : string.Empty;
             var lastName = names.Length > 1 ? names[1] : string.Empty;
 
             var userDto = new AuthUserDto
             {
-                Id = user.Id.ToString(),
-                Email = user.Email ?? string.Empty,
+                Id = identity.Id.ToString(),
+                Email = identity.Email ?? string.Empty,
                 FirstName = firstName,
                 LastName = lastName
             };

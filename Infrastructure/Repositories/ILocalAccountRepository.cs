@@ -4,7 +4,7 @@ namespace Infrastructure.Repositories
 {
     public interface ILocalAccountRepository
     {
-        Task<LocalAccount?> GetByUserIdAsync(long userId);
+        Task<LocalAccount?> GetByIdentityIdAsync(long identityId);
         Task AddAsync(LocalAccount localAccount);
         Task UpdateAsync(LocalAccount localAccount);
     }

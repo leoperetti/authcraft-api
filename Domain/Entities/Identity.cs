@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Domain.Entities
 {
-    public class User
+    public class Identity
     {
         public long Id { get; set; }
         public string Email { get; set; } = string.Empty;
@@ -14,6 +14,6 @@ namespace Domain.Entities
         public DateTimeOffset UpdatedAt { get; set; }
 
         public ICollection<OAuthAccount> OAuthAccounts { get; set; } = new List<OAuthAccount>();
-        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
+        public ICollection<Membership> Memberships { get; set; } = new List<Membership>();
     }
 }

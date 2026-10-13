@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
@@ -62,10 +62,14 @@
   <ItemGroup>
     <Build Include="Tables\oauth_accounts.sql" />
     <Build Include="Tables\providers.sql" />
-    <Build Include="Tables\users.sql" />
     <Build Include="Tables\local_accounts.sql" />
     <Build Include="Tables\roles.sql" />
-    <Build Include="Tables\users_roles.sql" />
+    <Build Include="Tables\membership_roles.sql" />
+    <Build Include="Tables\audit_logs.sql" />
+    <Build Include="Tables\tenants.sql" />
+    <Build Include="Tables\tenant_api_keys.sql" />
+    <Build Include="Tables\identities.sql" />
+    <Build Include="Tables\memberships.sql" />
   </ItemGroup>
   <ItemGroup>
     <PostDeploy Include="postdeploys\Script.PostDeployment.sql" />

@@ -11,27 +11,28 @@ namespace Application.Services
     // Implements signup using Argon2id for password hashing (modern memory-hard algorithm)
     public class LocalAuthenticationService : ILocalAuthService
     {
-        private readonly IUserRepository _users;
+        private readonly IIdentityRepository _identities;
         private readonly ILocalAccountRepository _localAccounts;
         private readonly IRoleService _roleService;
+        private readonly IUnitOfWork _unitOfWork;
 
-        public LocalAuthenticationService(IUserRepository users, ILocalAccountRepository localAccounts, Application.Interfaces.IRoleService roleService)
+        public LocalAuthenticationService(IIdentityRepository identities, ILocalAccountRepository localAccounts, Application.Interfaces.IRoleService roleService, IUnitOfWork unitOfWork)
         {
-            _users = users;
+            _identities = identities;
             _localAccounts = localAccounts;
             _roleService = roleService;
+            _unitOfWork = unitOfWork;
         }
 
-        public async Task<User> SignupAsync(SignupRequest request)
+        public async Task<Identity> SignupAsync(SignupRequest request)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
 
-            var existing = await _users.GetByEmailAsync(request.Email);
-            if (existing != null)
+            var existingIdentity = await _identities.GetByEmailAsync(request.Email);
+            if (existingIdentity != null)
                 throw new InvalidOperationException("El email con el que intenta registrarse ya existe");
 
             var now = DateTimeOffset.UtcNow;
-            // Validate and normalize phone number to E.164 format
             string? normalizedPhone = null;
             if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
             {
@@ -40,7 +41,7 @@ namespace Application.Services
                     throw new InvalidOperationException("El número de teléfono debe estar en formato E.164 (por ejemplo +5511999998888)");
             }
 
-            var user = new User
+            var identity = new Identity
             {
                 Email = request.Email ?? string.Empty,
                 PhoneNumber = normalizedPhone,
@@ -49,7 +50,7 @@ namespace Application.Services
                 UpdatedAt = now
             };
 
-            await _users.AddAsync(user);
+            await _identities.AddAsync(identity);
 
             // Generate a random salt
             var salt = new byte[16];
@@ -67,9 +68,9 @@ namespace Application.Services
 
             var hash = await argon2.GetBytesAsync(32); // 256-bit
 
-            var local = new LocalAccount
+            var localAccount = new LocalAccount
             {
-                UserId = user.Id,
+                Identity = identity,
                 PasswordHash = hash,
                 Salt = salt,
                 Algorithm = "argon2id$m=65536,t=4,p=" + argon2.DegreeOfParallelism,
@@ -77,10 +78,11 @@ namespace Application.Services
                 UpdatedAt = now
             };
 
-            await _localAccounts.AddAsync(local);
-            await _roleService.AssignRoleAsync(user.Id, "user");
+            await _localAccounts.AddAsync(localAccount);
+            await _roleService.AssignRoleAsync(identity, "user");
+            await _unitOfWork.SaveChangesAsync();
 
-            return user;
+            return identity;
         }
 
         private static string? NormalizeE164(string phone)

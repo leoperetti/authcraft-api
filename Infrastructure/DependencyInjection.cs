@@ -19,11 +19,12 @@ namespace Infrastructure
                 options.UseSqlServer(connectionStringOverride));
 
             // Repositories
-            services.AddScoped<IUserRepository, UserRepository>();
+            services.AddScoped<IIdentityRepository, IdentityRepository>();
             services.AddScoped<IRoleRepository, RoleRepository>();
             services.AddScoped<IProviderRepository, ProviderRepository>();
             services.AddScoped<IOAuthAccountRepository, OAuthAccountRepository>();
             services.AddScoped<ILocalAccountRepository, LocalAccountRepository>();
+            services.AddScoped<IUnitOfWork, UnitOfWork>();
 
             return services;
         }
