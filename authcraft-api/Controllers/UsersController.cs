@@ -13,7 +13,7 @@ namespace authcraft_api.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "superadmin,admin")]
+    [Authorize(Roles = "superadmin,owner,admin")]
     public class UsersController : ControllerBase
     {
         private readonly IUserService _userService;
@@ -46,7 +46,8 @@ namespace authcraft_api.Controllers
             bool requesterIsAdmin = requesterRoles.Contains("admin");
 
             var targetIdentityRoles = targetIdentity.Memberships
-                .Select(membership => membership.Role.Name)
+                .SelectMany(membership => membership.MembershipRoles)
+                .Select(membershipRole => membershipRole.Role.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var requestedRoles = request.Roles
@@ -107,34 +108,57 @@ namespace authcraft_api.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
-            // Determine requester roles
+            var tenantClientId = User.FindFirstValue("tenant");
+            if (string.IsNullOrWhiteSpace(tenantClientId))
+            {
+                return Unauthorized("El token no contiene el claim 'tenant' (client_id)");
+            }
+
             var requesterRoles = User.Claims
-                .Where(claim => claim.Type == ClaimTypes.Role || claim.Type == JwtRegisteredClaimNames.Sub /* no-op to keep selection */)
                 .Where(claim => claim.Type == ClaimTypes.Role)
                 .Select(claim => claim.Value)
-                .ToList();
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             bool isSuper = requesterRoles.Contains("superadmin");
+            bool isOwner = requesterRoles.Contains("owner");
             bool isAdmin = requesterRoles.Contains("admin");
 
-            var allIdentities = await _userService.GetAllWithRolesAsync();
+            var allIdentities = await _userService.GetAllWithRolesAsync(tenantClientId);
             var usersDto = new List<UserWithRolesDto>();
 
             foreach (var identity in allIdentities)
             {
-                var identityRoles = identity.Memberships.Select(membership => membership.Role.Name).ToList();
+                var identityRoles = identity.Memberships
+                    .Where(membership => membership.Tenant != null
+                        && string.Equals(membership.Tenant.ClientId, tenantClientId, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(membership => membership.MembershipRoles)
+                    .Select(membershipRole => membershipRole.Role.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (identityRoles.Count == 0)
+                    continue;
 
                 // Authorization rules
                 if (isSuper)
                 {
-                    // superadmin can see users with roles admin and user
-                    if (!identityRoles.Any(role => role == "admin" || role == "user"))
+                    // superadmin puede ver usuarios con rol admin y user dentro del tenant
+                    if (!identityRoles.Any(role => string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                }
+                else if (isOwner)
+                {
+                    // owner puede ver usuarios con rol owner, admin y user dentro del tenant
+                    if (!identityRoles.Any(role => string.Equals(role, "owner", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)))
                         continue;
                 }
                 else if (isAdmin)
                 {
-                    // admin can see only users with role user
-                    if (!identityRoles.Any(role => role == "user"))
+                    // admin puede ver solo usuarios con rol user dentro del tenant
+                    if (!identityRoles.Any(role => string.Equals(role, "user", StringComparison.OrdinalIgnoreCase)))
                         continue;
                 }
                 else
@@ -164,7 +188,11 @@ namespace authcraft_api.Controllers
             var identity = await _userService.GetByIdWithRolesAsync(id);
             if (identity == null) return NotFound();
 
-            var identityRoles = identity.Memberships.Select(membership => membership.Role.Name).ToList();
+            var identityRoles = identity.Memberships
+                .SelectMany(membership => membership.MembershipRoles)
+                .Select(membershipRole => membershipRole.Role.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             // Determine requester roles
             var requesterRoles = User.Claims

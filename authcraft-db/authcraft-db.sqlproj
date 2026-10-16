@@ -70,6 +70,7 @@
     <Build Include="Tables\tenant_api_keys.sql" />
     <Build Include="Tables\identities.sql" />
     <Build Include="Tables\memberships.sql" />
+    <Build Include="Tables\invitations.sql" />
   </ItemGroup>
   <ItemGroup>
     <PostDeploy Include="postdeploys\Script.PostDeployment.sql" />

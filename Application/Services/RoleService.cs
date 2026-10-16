@@ -1,15 +1,21 @@
 using Application.Interfaces;
 using Domain.Entities;
+using Infrastructure.Data;
 using Infrastructure.Repositories;
+using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services
 {
     public class RoleService : IRoleService
     {
+        private readonly AppDbContext _dbContext;
+        private readonly IIdentityRepository _identities;
         private readonly IRoleRepository _roles;
 
-        public RoleService(IRoleRepository roles)
+        public RoleService(AppDbContext dbContext, IIdentityRepository identities, IRoleRepository roles)
         {
+            _dbContext = dbContext;
+            _identities = identities;
             _roles = roles;
         }
 
@@ -18,62 +24,78 @@ namespace Application.Services
             return await _roles.GetRolesByIdentityIdAsync(identityId);
         }
 
-        public async Task<IList<string>> GetAllRolesAsync()
+        public async Task<IList<string>> GetAllRolesAsync(string clientId)
         {
-            return await _roles.GetAllRolesAsync();
+            if (string.IsNullOrWhiteSpace(clientId))
+                throw new InvalidOperationException("Se requiere clientId para listar roles del tenant");
+
+            return await _roles.GetAllRolesAsync(clientId.Trim());
         }
 
-        public async Task AssignRoleAsync(long identityId, string roleName)
+        public async Task AssignRoleAsync(long identityId, string clientId, string roleName)
         {
-            if (string.IsNullOrWhiteSpace(roleName))
-                throw new ArgumentException("roleName is required", nameof(roleName));
+            var identity = await _identities.GetByIdWithRolesAsync(identityId)
+                ?? throw new InvalidOperationException($"La identidad '{identityId}' no existe");
 
-            var role = await _roles.GetByNameAsync(roleName)
-                ?? throw new InvalidOperationException($"El rol '{roleName}' no existe");
-
-            var hasRole = await _roles.IdentityHasRoleAsync(identityId, role.Id);
-            if (!hasRole)
-            {
-                var membershipRole = new MembershipRole
-                {
-                    MembershipId = identityId,
-                    RoleId = role.Id,
-                    TenantId = role.TenantId
-                };
-                await _roles.AddMembershipRoleAsync(membershipRole);
-            }
+            await AssignRoleAsync(identity, clientId, roleName);
         }
 
-        public async Task AssignRoleAsync(Identity identity, string roleName)
+        public async Task AssignRoleAsync(Identity identity, string clientId, string roleName)
         {
             if (identity == null)
                 throw new ArgumentNullException(nameof(identity));
 
+            if (string.IsNullOrWhiteSpace(clientId))
+                throw new ArgumentException("clientId is required", nameof(clientId));
+
             if (string.IsNullOrWhiteSpace(roleName))
                 throw new ArgumentException("roleName is required", nameof(roleName));
 
-            var role = await _roles.GetByNameAsync(roleName)
-                ?? throw new InvalidOperationException($"El rol '{roleName}' no existe");
+            var normalizedClientId = clientId.Trim();
+            var tenantId = await _dbContext.Tenants
+                .Where(tenant => tenant.ClientId == normalizedClientId)
+                .Select(tenant => (long?)tenant.Id)
+                .SingleOrDefaultAsync()
+                ?? throw new InvalidOperationException($"No existe un tenant para el clientId '{normalizedClientId}'");
 
-            var membership = identity.Memberships.FirstOrDefault(currentMembership => currentMembership.TenantId == role.TenantId);
+            var normalizedRoleName = roleName.Trim();
+            var role = await _roles.GetByNameAsync(tenantId, normalizedRoleName)
+                ?? throw new InvalidOperationException($"El rol '{normalizedRoleName}' no existe para el clientId '{normalizedClientId}'");
+
+            var now = DateTimeOffset.UtcNow;
+            var membership = identity.Memberships.FirstOrDefault(currentMembership => currentMembership.TenantId == tenantId);
             if (membership == null)
             {
                 membership = new Membership
                 {
                     IdentityId = identity.Id,
                     Identity = identity,
-                    TenantId = role.TenantId,
+                    TenantId = tenantId,
                     Status = "active",
-                    RoleId = role.Id,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    UpdatedAt = DateTimeOffset.UtcNow
+                    CreatedAt = now,
+                    UpdatedAt = now
                 };
                 identity.Memberships.Add(membership);
+            }
+            else
+            {
+                membership.UpdatedAt = now;
+            }
+
+            var membershipAlreadyHasRole = membership.MembershipRoles.Any(membershipRole => membershipRole.RoleId == role.Id);
+            if (membershipAlreadyHasRole)
+            {
                 return;
             }
 
-            membership.RoleId = role.Id;
-            membership.UpdatedAt = DateTimeOffset.UtcNow;
+            membership.MembershipRoles.Add(new MembershipRole
+            {
+                MembershipId = membership.IdentityId,
+                RoleId = role.Id,
+                TenantId = tenantId,
+                Membership = membership,
+                Role = role
+            });
         }
     }
 }

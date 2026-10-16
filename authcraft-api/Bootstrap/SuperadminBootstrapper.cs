@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace authcraft_api.Bootstrap;
 
@@ -63,7 +64,8 @@ public sealed class SuperadminBootstrapper
             ClientId = _options.TenantClientId,
             Slug = _options.TenantSlug,
             Name = _options.TenantName,
-            Status = "active"
+            Status = "active",
+            AllowedOrigins = JsonSerializer.Serialize(new[] { "http://localhost:4200" })
         };
 
         await _appDbContext.Tenants.AddAsync(tenant, cancellationToken);
@@ -75,6 +77,7 @@ public sealed class SuperadminBootstrapper
     private async Task<Role> EnsureRolesAsync(long tenantId, CancellationToken cancellationToken)
     {
         var superadminRole = await EnsureRoleAsync(tenantId, "superadmin", cancellationToken);
+        await EnsureRoleAsync(tenantId, "owner", cancellationToken);
         await EnsureRoleAsync(tenantId, "admin", cancellationToken);
         await EnsureRoleAsync(tenantId, "user", cancellationToken);
 
@@ -94,7 +97,8 @@ public sealed class SuperadminBootstrapper
         var role = new Role
         {
             TenantId = tenantId,
-            Name = roleName
+            Name = roleName,
+            IsSystem = true,
         };
 
         await _appDbContext.Roles.AddAsync(role, cancellationToken);
@@ -180,16 +184,14 @@ public sealed class SuperadminBootstrapper
                 IdentityId = identityId,
                 TenantId = tenantId,
                 Status = "active",
-                RoleId = superadminRoleId,
                 CreatedAt = now,
                 UpdatedAt = now
             };
 
             await _appDbContext.Memberships.AddAsync(membership, cancellationToken);
         }
-        else if (membership.RoleId != superadminRoleId)
+        else
         {
-            membership.RoleId = superadminRoleId;
             membership.UpdatedAt = now;
         }
 

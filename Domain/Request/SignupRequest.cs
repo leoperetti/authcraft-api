@@ -19,6 +19,8 @@ namespace Domain.Request
         [Required]
         public string Password { get; set; } = null!;
 
+        public string? ClientId { get; set; }
+
         public string? InvitationCode { get; set; }
     }
 }

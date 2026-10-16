@@ -14,7 +14,7 @@ namespace Infrastructure.Data.Configurations
 
             builder.Property(tenantApiKey => tenantApiKey.Id)
                 .HasColumnName("id")
-                .ValueGeneratedNever();
+                .ValueGeneratedOnAdd();
 
             builder.Property(tenantApiKey => tenantApiKey.TenantId)
                 .HasColumnName("tenant_id")

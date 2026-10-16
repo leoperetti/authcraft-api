@@ -22,6 +22,10 @@ namespace Infrastructure.Data.Configurations
                 .HasMaxLength(50)
                 .IsRequired();
 
+            builder.Property(role => role.IsSystem)
+                .HasColumnName("is_system")
+                .IsRequired();
+
             builder.HasIndex(role => new { role.TenantId, role.Name })
                 .IsUnique()
                 .HasDatabaseName("UQ_roles_name");

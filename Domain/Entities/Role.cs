@@ -7,9 +7,9 @@ namespace Domain.Entities
         public int Id { get; set; }
         public long TenantId { get; set; }
         public string Name { get; set; } = string.Empty;
+        public bool IsSystem { get; set; } = false;
 
         public Tenant Tenant { get; set; } = null!;
         public ICollection<MembershipRole> MembershipRoles { get; set; } = new List<MembershipRole>();
-        public ICollection<Membership> Memberships { get; set; } = new List<Membership>();
     }
 }

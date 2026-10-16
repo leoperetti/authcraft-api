@@ -29,10 +29,6 @@ namespace Infrastructure.Data.Configurations
                 .IsRequired()
                 .HasDefaultValue("active");
 
-            builder.Property(membership => membership.RoleId)
-                .HasColumnName("role_id")
-                .IsRequired();
-
             builder.Property(membership => membership.InvitedBy)
                 .HasColumnName("invited_by")
                 .IsRequired(false);
@@ -79,12 +75,6 @@ namespace Infrastructure.Data.Configurations
                 .WithMany()
                 .HasForeignKey(membership => membership.InvitedBy)
                 .HasConstraintName("FK_memberships_invited_by")
-                .OnDelete(DeleteBehavior.NoAction);
-
-            builder.HasOne(membership => membership.Role)
-                .WithMany(role => role.Memberships)
-                .HasForeignKey(membership => membership.RoleId)
-                .HasConstraintName("FK_memberships_role")
                 .OnDelete(DeleteBehavior.NoAction);
         }
     }

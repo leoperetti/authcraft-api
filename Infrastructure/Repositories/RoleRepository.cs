@@ -9,10 +9,12 @@ namespace Infrastructure.Repositories
         private readonly AppDbContext _db;
         public RoleRepository(AppDbContext db) => _db = db;
 
-        public async Task<Role?> GetByNameAsync(string name)
+        public async Task<Role?> GetByNameAsync(long tenantId, string name)
         {
-            if (string.IsNullOrEmpty(name)) return null;
-            return await _db.Roles.SingleOrDefaultAsync(role => role.Name == name);
+            if (tenantId <= 0 || string.IsNullOrWhiteSpace(name)) return null;
+
+            var normalizedRoleName = name.Trim();
+            return await _db.Roles.SingleOrDefaultAsync(role => role.TenantId == tenantId && role.Name == normalizedRoleName);
         }
 
         public async Task<Role?> GetByIdAsync(int id) => await _db.Roles.FindAsync(id);
@@ -48,9 +50,15 @@ namespace Infrastructure.Repositories
                 .ToListAsync();
         }
 
-        public async Task<IList<string>> GetAllRolesAsync()
+        public async Task<IList<string>> GetAllRolesAsync(string clientId)
         {
+            if (string.IsNullOrWhiteSpace(clientId))
+                return new List<string>();
+
+            var normalizedClientId = clientId.Trim();
+
             return await _db.Roles
+                .Where(role => role.Tenant.ClientId == normalizedClientId)
                 .Select(role => role.Name)
                 .ToListAsync();
         }

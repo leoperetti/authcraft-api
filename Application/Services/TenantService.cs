@@ -6,8 +6,9 @@ using Domain.Dto;
 using Domain.Entities;
 using Domain.Request;
 using Domain.Response;
-using Infrastructure.Data;
-using Microsoft.EntityFrameworkCore;
+using Infrastructure.Repositories;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 
 namespace Application.Services
 {
@@ -15,29 +16,30 @@ namespace Application.Services
     {
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-        private readonly AppDbContext _dbContext;
+        private readonly IEmailService _emailService;
+        private readonly IInvitationRepository _invitationRepository;
+        private readonly ITenantRepository _tenantRepository;
+        private readonly IConfiguration _configuration;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
-        public TenantService(AppDbContext dbContext)
+        public TenantService(IEmailService emailService, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, IConfiguration configuration, IHttpContextAccessor httpContextAccessor)
         {
-            _dbContext = dbContext;
+            _emailService = emailService;
+            _invitationRepository = invitationRepository;
+            _tenantRepository = tenantRepository;
+            _configuration = configuration;
+            _httpContextAccessor = httpContextAccessor;
         }
 
         public async Task<IReadOnlyList<TenantDto>> ListAsync(CancellationToken cancellationToken = default)
         {
-            var tenants = await _dbContext.Tenants
-                .AsNoTracking()
-                .OrderBy(tenant => tenant.Id)
-                .ToListAsync(cancellationToken);
-
+            var tenants = await _tenantRepository.ListAsync(cancellationToken);
             return tenants.Select(Map).ToList();
         }
 
         public async Task<TenantDto?> GetAsync(long id, CancellationToken cancellationToken = default)
         {
-            var tenant = await _dbContext.Tenants
-                .AsNoTracking()
-                .FirstOrDefaultAsync(currentTenant => currentTenant.Id == id, cancellationToken);
-
+            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
             return tenant is null ? null : Map(tenant);
         }
 
@@ -52,10 +54,15 @@ namespace Application.Services
                 ClientId = request.ClientId.Trim(),
                 Slug = request.Slug.Trim().ToLowerInvariant(),
                 Name = request.Name.Trim(),
+                PrimaryDomain = string.IsNullOrWhiteSpace(request.PrimaryDomain) ? null : request.PrimaryDomain.Trim().ToLowerInvariant(),
                 Status = request.Status,
                 Settings = request.Settings is null ? null : JsonSerializer.Serialize(request.Settings, JsonOptions),
                 AllowedOrigins = JsonSerializer.Serialize(allowedOrigins, JsonOptions)
             };
+
+            tenant.Roles.Add(new Role { Name = "owner", IsSystem = true });
+            tenant.Roles.Add(new Role { Name = "admin", IsSystem = true });
+            tenant.Roles.Add(new Role { Name = "user", IsSystem = true });
 
             tenant.TenantApiKeys.Add(new TenantApiKey
             {
@@ -63,15 +70,51 @@ namespace Application.Services
                 Scopes = JsonSerializer.Serialize(new[] { "tenants:read", "tenants:write" }, JsonOptions)
             });
 
-            _dbContext.Tenants.Add(tenant);
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            await _tenantRepository.AddAsync(tenant, cancellationToken);
 
-            return new CreateTenantResponse(Map(tenant), apiKeyPlain);
+            // Crear invitación para el owner
+            var invitationCode = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow;
+            var invitation = new Invitation
+            {
+                TenantId = tenant.Id,
+                Email = request.OwnerEmail.Trim(),
+                Code = invitationCode,
+                CreatedAt = now,
+                ExpiresAt = now.AddDays(7),
+                Used = false
+            };
+
+            if (await _invitationRepository.HasPendingAsync(tenant.Id, request.OwnerEmail.Trim(), cancellationToken))
+            {
+                throw new PendingInvitationException();
+            }
+
+            await _invitationRepository.AddAsync(invitation, cancellationToken);
+
+            // Construir URL de invitación
+            var invitationBaseUrl = tenant.PrimaryDomain;
+            string invitationUrl;
+            if (!string.IsNullOrWhiteSpace(invitationBaseUrl))
+            {
+                invitationUrl = invitationBaseUrl.TrimEnd('/') + $"/signup?invitationCode={invitationCode}";
+            }
+            else
+            {
+                invitationUrl = $"/signup?invitationCode={invitationCode}";
+            }
+
+            // Enviar email informando de la apertura de cuenta (si hay configuración SMTP, el servicio lo enviará)
+            var subject = "Invitación para completar la apertura de cuenta";
+            var body = $"Se ha creado una cuenta para su organización. Use el siguiente enlace para completar el registro: <a href=\"{invitationUrl}\">{invitationUrl}</a>";
+            _emailService.SendInvitation(request.OwnerEmail.Trim(), subject, body);
+
+            return new CreateTenantResponse(Map(tenant), apiKeyPlain, invitationUrl);
         }
 
         public async Task<TenantDto?> UpdateAsync(long id, UpdateTenantRequest request, CancellationToken cancellationToken = default)
         {
-            var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(currentTenant => currentTenant.Id == id, cancellationToken);
+            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
             if (tenant is null)
             {
                 return null;
@@ -80,6 +123,11 @@ namespace Application.Services
             if (request.Name is not null)
             {
                 tenant.Name = request.Name.Trim();
+            }
+
+            if(request.PrimaryDomain is not null)
+            {
+                tenant.PrimaryDomain = string.IsNullOrWhiteSpace(request.PrimaryDomain) ? null : request.PrimaryDomain.Trim().ToLowerInvariant();
             }
 
             if (request.Status is not null)
@@ -97,35 +145,25 @@ namespace Application.Services
                 tenant.AllowedOrigins = JsonSerializer.Serialize(NormalizeOrigins(request.AllowedOrigins), JsonOptions);
             }
 
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            await _tenantRepository.UpdateAsync(tenant, cancellationToken);
             return Map(tenant);
         }
 
         public async Task<bool> UpdateStatusAsync(long id, string status, CancellationToken cancellationToken = default)
         {
-            var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(currentTenant => currentTenant.Id == id, cancellationToken);
+            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
             if (tenant is null)
             {
                 return false;
             }
 
             tenant.Status = status;
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            await _tenantRepository.UpdateAsync(tenant, cancellationToken);
             return true;
         }
 
-        public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
-        {
-            var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(currentTenant => currentTenant.Id == id, cancellationToken);
-            if (tenant is null)
-            {
-                return false;
-            }
-
-            _dbContext.Tenants.Remove(tenant);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-            return true;
-        }
+        public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+            => _tenantRepository.DeleteAsync(id, cancellationToken);
 
         private static TenantDto Map(Tenant tenant)
         {
@@ -135,6 +173,7 @@ namespace Application.Services
                 ClientId = tenant.ClientId,
                 Slug = tenant.Slug,
                 Name = tenant.Name,
+                PrimaryDomain = tenant.PrimaryDomain,
                 Status = tenant.Status,
                 Settings = DeserializeSettings(tenant.Settings),
                 AllowedOrigins = DeserializeOrigins(tenant.AllowedOrigins)

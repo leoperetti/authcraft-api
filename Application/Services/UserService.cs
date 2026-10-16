@@ -38,7 +38,8 @@ namespace Application.Services
                 throw new ValidationException($"Roles inexistentes: {string.Join(", ", missingRoles)}");
 
             var currentRoles = identity.Memberships
-                .Select(membership => membership.Role.Name)
+                .SelectMany(membership => membership.MembershipRoles)
+                .Select(membershipRole => membershipRole.Role.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var rolesToAdd = requested.Except(currentRoles, StringComparer.OrdinalIgnoreCase).ToList();
@@ -47,33 +48,69 @@ namespace Application.Services
             if (rolesToAdd.Count == 0 && rolesToRemove.Count == 0)
                 return;
 
-            foreach (var role in foundRoles.Where(foundRole => rolesToAdd.Contains(foundRole.Name, StringComparer.OrdinalIgnoreCase)))
+            var now = DateTimeOffset.UtcNow;
+            var rolesToAddByName = foundRoles
+                .Where(foundRole => rolesToAdd.Contains(foundRole.Name, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var role in rolesToAddByName)
             {
-                var existingMembership = identity.Memberships.FirstOrDefault(membership => membership.TenantId == role.TenantId);
-                if (existingMembership == null)
+                var membership = identity.Memberships.FirstOrDefault(currentMembership => currentMembership.TenantId == role.TenantId);
+                if (membership == null)
                 {
-                    identity.Memberships.Add(new Membership
+                    membership = new Membership
                     {
                         IdentityId = identity.Id,
+                        Identity = identity,
                         TenantId = role.TenantId,
                         Status = "active",
-                        RoleId = role.Id,
-                        CreatedAt = DateTimeOffset.UtcNow,
-                        UpdatedAt = DateTimeOffset.UtcNow
-                    });
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    identity.Memberships.Add(membership);
+                }
+                else
+                {
+                    membership.UpdatedAt = now;
+                }
+
+                var membershipAlreadyHasRole = membership.MembershipRoles.Any(membershipRole => membershipRole.RoleId == role.Id);
+                if (membershipAlreadyHasRole)
+                {
                     continue;
                 }
 
-                existingMembership.RoleId = role.Id;
-                existingMembership.UpdatedAt = DateTimeOffset.UtcNow;
+                membership.MembershipRoles.Add(new MembershipRole
+                {
+                    MembershipId = membership.IdentityId,
+                    RoleId = role.Id,
+                    TenantId = role.TenantId,
+                    Role = role,
+                    Membership = membership
+                });
             }
 
-            var membershipsToRemove = identity.Memberships
-                .Where(membership => rolesToRemove.Contains(membership.Role.Name, StringComparer.OrdinalIgnoreCase))
-                .ToList();
+            foreach (var membership in identity.Memberships.ToList())
+            {
+                var membershipRolesToRemove = membership.MembershipRoles
+                    .Where(membershipRole => rolesToRemove.Contains(membershipRole.Role.Name, StringComparer.OrdinalIgnoreCase))
+                    .ToList();
 
-            foreach (var membership in membershipsToRemove)
-                identity.Memberships.Remove(membership);
+                foreach (var membershipRole in membershipRolesToRemove)
+                {
+                    membership.MembershipRoles.Remove(membershipRole);
+                }
+
+                if (membershipRolesToRemove.Count > 0)
+                {
+                    membership.UpdatedAt = now;
+                }
+
+                if (membership.MembershipRoles.Count == 0)
+                {
+                    identity.Memberships.Remove(membership);
+                }
+            }
 
             await _identities.UpdateAsync(identity);
 
@@ -90,9 +127,9 @@ namespace Application.Services
             await _unitOfWork.SaveChangesAsync(ct);
         }
 
-        public async Task<IEnumerable<Identity>> GetAllWithRolesAsync()
+        public async Task<IEnumerable<Identity>> GetAllWithRolesAsync(string clientId)
         {
-            return await _identities.GetAllWithRolesAsync();
+            return await _identities.GetAllWithRolesAsync(clientId);
         }
 
         public async Task<Identity> GetByIdWithRolesAsync(long id)

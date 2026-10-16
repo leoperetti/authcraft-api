@@ -8,7 +8,7 @@ namespace Application.Interfaces
 
     public interface IAuthenticationService
     {
-        Task<(Identity identity, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info);
+        Task<(Identity identity, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info, string clientId);
         Task<AuthResponse> LoginWithPasswordAsync(LoginRequest request, string jwtKey, string? jwtIssuer, string? jwtAudience);
     }
 }

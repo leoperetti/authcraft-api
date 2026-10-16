@@ -13,8 +13,10 @@ namespace Application
             services.AddScoped<ILocalAuthService, LocalAuthenticationService>();
             services.AddScoped<IRoleService, RoleService>();
             services.AddScoped<ITenantService, TenantService>();
+            services.AddScoped<IInvitationService, InvitationService>();
             services.AddScoped<IUserService, UserService>();
             services.AddScoped<IAuditService, AuditService>();
+            services.AddSingleton<IEmailService, BrevoEmailService>();
 
             return services;
         }

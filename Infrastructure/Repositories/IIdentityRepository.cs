@@ -11,7 +11,7 @@ namespace Infrastructure.Repositories
         Task UpdateAsync(Identity identity);
         Task<Identity?> GetByIdAsync(long identityId);
         Task<IList<Identity>> GetAllAsync();
-        Task<IList<Identity>> GetAllWithRolesAsync();
+        Task<IList<Identity>> GetAllWithRolesAsync(string clientId);
         Task<Identity?> GetByIdWithRolesAsync(long id);
     }
 }

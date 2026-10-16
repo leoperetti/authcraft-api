@@ -3,8 +3,10 @@ using System.Text;
 using Application.Interfaces;
 using Domain.Entities;
 using Domain.Request;
+using Infrastructure.Data;
 using Infrastructure.Repositories;
 using Konscious.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services
 {
@@ -13,13 +15,15 @@ namespace Application.Services
     {
         private readonly IIdentityRepository _identities;
         private readonly ILocalAccountRepository _localAccounts;
+        private readonly AppDbContext _dbContext;
         private readonly IRoleService _roleService;
         private readonly IUnitOfWork _unitOfWork;
 
-        public LocalAuthenticationService(IIdentityRepository identities, ILocalAccountRepository localAccounts, Application.Interfaces.IRoleService roleService, IUnitOfWork unitOfWork)
+        public LocalAuthenticationService(IIdentityRepository identities, ILocalAccountRepository localAccounts, AppDbContext dbContext, Application.Interfaces.IRoleService roleService, IUnitOfWork unitOfWork)
         {
             _identities = identities;
             _localAccounts = localAccounts;
+            _dbContext = dbContext;
             _roleService = roleService;
             _unitOfWork = unitOfWork;
         }
@@ -32,6 +36,7 @@ namespace Application.Services
             if (existingIdentity != null)
                 throw new InvalidOperationException("El email con el que intenta registrarse ya existe");
 
+            var clientId = await ResolveClientIdAsync(request);
             var now = DateTimeOffset.UtcNow;
             string? normalizedPhone = null;
             if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
@@ -79,10 +84,113 @@ namespace Application.Services
             };
 
             await _localAccounts.AddAsync(localAccount);
-            await _roleService.AssignRoleAsync(identity, "user");
+
+            var roleToAssign = await ResolveSignupRoleAsync(request, clientId);
+            await _roleService.AssignRoleAsync(identity, clientId, roleToAssign);
+
+            if (!string.IsNullOrWhiteSpace(request.InvitationCode))
+            {
+                var normalizedInvitationCode = request.InvitationCode.Trim();
+                var nowForInvitation = DateTimeOffset.UtcNow;
+                var invitation = await _dbContext.Invitations
+                    .FirstOrDefaultAsync(currentInvitation =>
+                        currentInvitation.Code == normalizedInvitationCode
+                        && currentInvitation.Email == request.Email
+                        && !currentInvitation.Used
+                        && (!currentInvitation.ExpiresAt.HasValue || currentInvitation.ExpiresAt > nowForInvitation));
+
+                if (invitation == null)
+                    throw new InvalidOperationException("La invitación no es válida para el email indicado");
+
+                invitation.Used = true;
+
+                var joinedMembership = identity.Memberships
+                    .FirstOrDefault(currentMembership => currentMembership.TenantId == invitation.TenantId);
+
+                if (joinedMembership != null)
+                {
+                    joinedMembership.JoinedAt ??= nowForInvitation;
+                    joinedMembership.UpdatedAt = nowForInvitation;
+                }
+            }
+
             await _unitOfWork.SaveChangesAsync();
 
             return identity;
+        }
+
+        private async Task<string> ResolveSignupRoleAsync(SignupRequest request, string clientId)
+        {
+            if (string.IsNullOrWhiteSpace(request.InvitationCode))
+            {
+                return "user";
+            }
+
+            var tenantId = await _dbContext.Tenants
+                .Where(tenant => tenant.ClientId == clientId)
+                .Select(tenant => (long?)tenant.Id)
+                .SingleOrDefaultAsync();
+
+            if (!tenantId.HasValue)
+            {
+                return "user";
+            }
+
+            var ownerRoleId = await _dbContext.Roles
+                .Where(role => role.TenantId == tenantId.Value && role.Name == "owner")
+                .Select(role => (int?)role.Id)
+                .SingleOrDefaultAsync();
+
+            if (!ownerRoleId.HasValue)
+            {
+                return "user";
+            }
+
+            var tenantAlreadyHasOwner = await _dbContext.MembershipRoles
+                .AnyAsync(membershipRole => membershipRole.TenantId == tenantId.Value && membershipRole.RoleId == ownerRoleId.Value);
+
+            return tenantAlreadyHasOwner ? "user" : "owner";
+        }
+
+        private async Task<string> ResolveClientIdAsync(SignupRequest request)
+        {
+            var normalizedRequestClientId = request.ClientId?.Trim();
+
+            if (!string.IsNullOrWhiteSpace(request.InvitationCode))
+            {
+                var normalizedInvitationCode = request.InvitationCode.Trim();
+                var now = DateTimeOffset.UtcNow;
+                var invitationClientId = await _dbContext.Invitations
+                    .Where(currentInvitation =>
+                        currentInvitation.Code == normalizedInvitationCode
+                        && currentInvitation.Email == request.Email
+                        && !currentInvitation.Used
+                        && (!currentInvitation.ExpiresAt.HasValue || currentInvitation.ExpiresAt > now))
+                    .Select(currentInvitation => currentInvitation.Tenant.ClientId)
+                    .SingleOrDefaultAsync();
+
+                if (string.IsNullOrWhiteSpace(invitationClientId))
+                    throw new InvalidOperationException("La invitación no es válida para el email indicado");
+
+                if (!string.IsNullOrWhiteSpace(normalizedRequestClientId)
+                    && !string.Equals(invitationClientId, normalizedRequestClientId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("El clientId no coincide con el tenant de la invitación");
+                }
+
+                return invitationClientId;
+            }
+
+            if (string.IsNullOrWhiteSpace(normalizedRequestClientId))
+                throw new InvalidOperationException("Se requiere clientId o invitationCode para determinar el tenant del registro");
+
+            var tenantExists = await _dbContext.Tenants
+                .AnyAsync(tenant => tenant.ClientId == normalizedRequestClientId);
+
+            if (!tenantExists)
+                throw new InvalidOperationException($"No existe un tenant para el clientId '{normalizedRequestClientId}'");
+
+            return normalizedRequestClientId;
         }
 
         private static string? NormalizeE164(string phone)

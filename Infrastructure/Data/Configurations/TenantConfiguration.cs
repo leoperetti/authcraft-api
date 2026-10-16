@@ -34,6 +34,11 @@ namespace Infrastructure.Data.Configurations
                 .HasMaxLength(200)
                 .IsRequired();
 
+            builder.Property(tenant => tenant.PrimaryDomain)
+                .HasColumnName("primary_domain")
+                .HasMaxLength(50)
+                .IsRequired(false);
+
             builder.Property(tenant => tenant.Status)
                 .HasColumnName("status")
                 .HasMaxLength(20)

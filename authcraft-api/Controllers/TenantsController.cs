@@ -49,6 +49,15 @@ namespace authcraft_api.Controllers
                 var res = await _tenantService.CreateAsync(req, ct);
                 return CreatedAtAction(nameof(Get), new { id = res.Tenant.Id }, res);
             }
+            catch (Application.Services.PendingInvitationException ex)
+            {
+                return Conflict(new ProblemDetails
+                {
+                    Title = "Invitación pendiente",
+                    Detail = ex.Message,
+                    Status = StatusCodes.Status409Conflict
+                });
+            }
             catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
                 when (ex.InnerException?.Message.Contains("UQ_tenants_slug") == true
                    || ex.InnerException?.Message.Contains("IX_tenants_client_id") == true)

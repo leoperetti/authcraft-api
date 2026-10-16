@@ -18,24 +18,27 @@ namespace Application.Services
         private readonly IOAuthAccountRepository _oauths;
         private readonly ILocalAccountRepository _localAccounts;
         private readonly ILocalAuthService _localAuthService;
-        private readonly IRoleRepository _roles;
         private readonly IRoleService _roleService;
         private readonly IUnitOfWork _unitOfWork;
 
-        public AuthenticationService(IProviderRepository providers, IIdentityRepository identities, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleRepository roles, IRoleService roleService, IUnitOfWork unitOfWork)
+        public AuthenticationService(IProviderRepository providers, IIdentityRepository identities, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleService roleService, IUnitOfWork unitOfWork)
         {
             _providers = providers;
             _identities = identities;
             _oauths = oauths;
             _localAccounts = localAccounts;
             _localAuthService = localAuthService;
-            _roles = roles;
             _roleService = roleService;
             _unitOfWork = unitOfWork;
         }
 
-        public async Task<(Identity identity, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info)
+        public async Task<(Identity identity, OAuthAccount oauth)> UpsertFromGoogleAsync(GoogleAuthInfo info, string clientId)
         {
+            if (string.IsNullOrWhiteSpace(clientId))
+                throw new InvalidOperationException("Se requiere clientId para determinar el tenant");
+
+            var normalizedClientId = clientId.Trim();
+
             var providerName = "google";
             var provider = await _providers.GetByNameAsync(providerName);
             if (provider == null)
@@ -92,7 +95,7 @@ namespace Application.Services
 
             if (isNewIdentity)
             {
-                await _roleService.AssignRoleAsync(identity, "user");
+                await _roleService.AssignRoleAsync(identity, normalizedClientId, "user");
             }
 
             await _unitOfWork.SaveChangesAsync();
@@ -103,7 +106,9 @@ namespace Application.Services
         public async Task<AuthResponse> LoginWithPasswordAsync(LoginRequest request, string jwtKey, string? jwtIssuer, string? jwtAudience)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
+            if (string.IsNullOrWhiteSpace(request.ClientId)) throw new InvalidOperationException("Se requiere clientId");
 
+            var normalizedClientId = request.ClientId.Trim();
             var identity = await _identities.GetByEmailWithMembershipsAsync(request.Identifier);
             if (identity == null) throw new InvalidOperationException("Credenciales inválidas");
 
@@ -112,6 +117,15 @@ namespace Application.Services
 
             var valid = await _localAuthService.VerifyPasswordAsync(request.Password, localAccount);
             if (!valid) throw new InvalidOperationException("Credenciales inválidas");
+
+            var membership = identity.Memberships
+                .FirstOrDefault(currentMembership =>
+                    currentMembership.Tenant != null
+                    && string.Equals(currentMembership.Tenant.ClientId, normalizedClientId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(currentMembership.Status, "active", StringComparison.OrdinalIgnoreCase));
+
+            if (membership == null)
+                throw new InvalidOperationException("Para poder acceder debe crear una nueva cuenta");
 
             var tokenHandler = new JwtSecurityTokenHandler();
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
@@ -122,24 +136,17 @@ namespace Application.Services
                 new Claim(JwtRegisteredClaimNames.Sub, identity.Id.ToString()),
                 new Claim(ClaimTypes.Email, identity.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, identity.Name ?? string.Empty),
+                new Claim("tenant", normalizedClientId)
             };
 
-            var roleNames = await _roles.GetRolesByIdentityIdAsync(identity.Id);
+            var roleNames = membership.MembershipRoles
+                .Select(membershipRole => membershipRole.Role.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             foreach (var roleName in roleNames)
             {
                 tokenClaims.Add(new Claim(ClaimTypes.Role, roleName));
-            }
-
-            var tenantClientId = identity.Memberships
-                .Where(membership => membership.Tenant != null)
-                .OrderByDescending(membership => string.Equals(membership.Status, "active", StringComparison.OrdinalIgnoreCase))
-                .ThenBy(membership => membership.TenantId)
-                .Select(membership => membership.Tenant.ClientId)
-                .FirstOrDefault();
-
-            if (!string.IsNullOrWhiteSpace(tenantClientId))
-            {
-                tokenClaims.Add(new Claim("tenant", tenantClientId));
             }
 
             var expires = DateTime.UtcNow.AddHours(24);

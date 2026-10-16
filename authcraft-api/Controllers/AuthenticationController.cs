@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -64,6 +64,12 @@ namespace authcraft_api.Controllers
         {
             try
             {
+                if (request == null || string.IsNullOrWhiteSpace(request.Identifier) || string.IsNullOrWhiteSpace(request.Password))
+                    return BadRequest(new { message = "Se requieren identifier y password" });
+
+                if (string.IsNullOrWhiteSpace(request.ClientId))
+                    return BadRequest(new { message = "Se requiere clientId" });
+
                 var jwtKey = GetJwtKey();
                 var jwtIssuer = _configuration["Jwt:Issuer"] ?? string.Empty;
                 var jwtAudience = _configuration["Jwt:Audience"] ?? string.Empty;
@@ -96,6 +102,9 @@ namespace authcraft_api.Controllers
         {
             if (request == null || string.IsNullOrEmpty(request.IdToken))
                 return BadRequest("Se requiere idToken");
+
+            if (string.IsNullOrWhiteSpace(request.ClientId))
+                return BadRequest("Se requiere clientId");
 
             var clientId = _configuration["Authentication:Google:ClientId"];
             if (string.IsNullOrEmpty(clientId))
@@ -131,7 +140,7 @@ namespace authcraft_api.Controllers
                 payload.Picture,
                 payload.HostedDomain);
 
-            var (identityRecord, oauth) = await _authService.UpsertFromGoogleAsync(info);
+            var (identityRecord, oauth) = await _authService.UpsertFromGoogleAsync(info, request.ClientId);
 
             // Crear ClaimsPrincipal para la sesión
             var claims = new List<Claim>

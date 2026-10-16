@@ -6,5 +6,8 @@ namespace Domain.Request
     {
         [Required]
         public string IdToken { get; set; } = null!;
+
+        [Required]
+        public string ClientId { get; set; } = string.Empty;
     }
 }

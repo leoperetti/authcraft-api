@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Application.Interfaces;
+using System.Security.Claims;
 
 namespace authcraft_api.Controllers
 {
@@ -13,7 +14,13 @@ namespace authcraft_api.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
-            var roles = await _roleService.GetAllRolesAsync();
+            var tenantClientId = User.FindFirstValue("tenant");
+            if (string.IsNullOrWhiteSpace(tenantClientId))
+            {
+                return Unauthorized("El token no contiene el claim 'tenant' (client_id)");
+            }
+
+            var roles = await _roleService.GetAllRolesAsync(tenantClientId);
             return Ok(roles);
         }
 

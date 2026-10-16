@@ -8,6 +8,5 @@ CREATE TABLE [dbo].[identities]
 	created_at DATETIMEOFFSET NOT NULL CONSTRAINT DF_identities_created_at DEFAULT SYSUTCDATETIME(),
 	updated_at DATETIMEOFFSET NOT NULL CONSTRAINT DF_identities_updated_at DEFAULT SYSUTCDATETIME(), 
 )
-
 GO
-CREATE INDEX [IX_identities_email] ON [dbo].[identities] ([email]);
+CREATE UNIQUE INDEX [UX_identities_email] ON [dbo].[identities] ([email]);

@@ -8,6 +8,9 @@ namespace Domain.Request
         [MaxLength(200)]
         public string? Name { get; set; }
 
+        [MaxLength(50)]
+        public string? PrimaryDomain { get; set; }
+
         [RegularExpression("^(active|suspended|archived)$")]
         public string? Status { get; set; }
 

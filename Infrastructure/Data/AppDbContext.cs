@@ -16,6 +16,7 @@ namespace Infrastructure.Data
         public DbSet<Membership> Memberships { get; set; } = null!;
         public DbSet<Tenant> Tenants { get; set; } = null!;
         public DbSet<TenantApiKey> TenantApiKeys { get; set; } = null!;
+        public DbSet<Invitation> Invitations { get; set; } = null!;
         public DbSet<OAuthAccount> OAuthAccounts { get; set; } = null!;
         public DbSet<Provider> Providers { get; set; } = null!;
         public DbSet<LocalAccount> LocalAccounts { get; set; } = null!;

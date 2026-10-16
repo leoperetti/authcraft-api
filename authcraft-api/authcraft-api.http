@@ -4,3 +4,14 @@ GET {{authcraft_api_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+
+POST {{authcraft_api_HostAddress}}/debug/smtp/send-invitation
+Content-Type: application/json
+
+{
+  "toEmail": "leo.peretti5@gmail.com",
+  "subject": "Prueba SMTP",
+  "body": "<p>Prueba de envío desde Visual Studio</p>"
+}
+
+###

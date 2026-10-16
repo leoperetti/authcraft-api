@@ -21,6 +21,9 @@ namespace Infrastructure.Repositories
             return await _db.Identities
                 .Include(identity => identity.Memberships)
                     .ThenInclude(membership => membership.Tenant)
+                .Include(identity => identity.Memberships)
+                    .ThenInclude(membership => membership.MembershipRoles)
+                        .ThenInclude(membershipRole => membershipRole.Role)
                 .SingleOrDefaultAsync(identity => identity.Email == email);
         }
 
@@ -46,11 +49,20 @@ namespace Infrastructure.Repositories
             return await _db.Identities.ToListAsync();
         }
 
-        public async Task<IList<Identity>> GetAllWithRolesAsync()
+        public async Task<IList<Identity>> GetAllWithRolesAsync(string clientId)
         {
+            if (string.IsNullOrWhiteSpace(clientId))
+                return new List<Identity>();
+
+            var normalizedClientId = clientId.Trim();
+
             return await _db.Identities
                 .Include(identity => identity.Memberships)
-                    .ThenInclude(membership => membership.Role)
+                    .ThenInclude(membership => membership.Tenant)
+                .Include(identity => identity.Memberships)
+                    .ThenInclude(membership => membership.MembershipRoles)
+                        .ThenInclude(membershipRole => membershipRole.Role)
+                .Where(identity => identity.Memberships.Any(membership => membership.Tenant.ClientId == normalizedClientId))
                 .ToListAsync();
         }
 
@@ -58,7 +70,8 @@ namespace Infrastructure.Repositories
         {
             return await _db.Identities
                 .Include(identity => identity.Memberships)
-                    .ThenInclude(membership => membership.Role)
+                    .ThenInclude(membership => membership.MembershipRoles)
+                        .ThenInclude(membershipRole => membershipRole.Role)
                 .SingleOrDefaultAsync(identity => identity.Id == id);
         }
     }

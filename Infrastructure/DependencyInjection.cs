@@ -24,7 +24,10 @@ namespace Infrastructure
             services.AddScoped<IProviderRepository, ProviderRepository>();
             services.AddScoped<IOAuthAccountRepository, OAuthAccountRepository>();
             services.AddScoped<ILocalAccountRepository, LocalAccountRepository>();
+            services.AddScoped<IInvitationRepository, InvitationRepository>();
+            services.AddScoped<ITenantRepository, TenantRepository>();
             services.AddScoped<IUnitOfWork, UnitOfWork>();
+            // Email service: registered in Application layer implementation (if desired)
 
             return services;
         }

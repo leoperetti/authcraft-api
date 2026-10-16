@@ -14,11 +14,17 @@ namespace Domain.Request
         [Required, MaxLength(200)]
         public string Name { get; set; } = default!;
 
+        [MaxLength(50)]
+        public string? PrimaryDomain { get; set; }
+
         [RegularExpression("^(active|suspended|archived)$")]
         public string Status { get; set; } = "active";
 
         public TenantSettingsDto? Settings { get; set; }
 
         public List<string> AllowedOrigins { get; set; } = new();
+
+        [Required, EmailAddress]
+        public string OwnerEmail { get; set; } = default!;
     }
 }
