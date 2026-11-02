@@ -1,5 +1,19 @@
 # authcraft-api — Gestión de secretos
 
+## Desarrollo guiado por especificaciones
+
+Este repositorio usa [GitHub Spec Kit](https://github.com/github/spec-kit) con
+GitHub Copilot. Instala su CLI una vez con `uv tool install specify-cli` y
+ejecuta las skills desde Copilot Chat, una por una:
+
+1. `/speckit-constitution` — revisa `.specify/memory/constitution.md`.
+2. `/speckit-specify` — define una funcionalidad acotada.
+3. `/speckit-clarify` (opcional) y `/speckit-plan`.
+4. `/speckit-tasks` y `/speckit-analyze` (opcional).
+5. `/speckit-implement` y `/speckit-converge` hasta completar.
+
+Las plantillas y skills están en `.specify/` y `.github/skills/`.
+
 Breve guía para ver y gestionar los secretos de desarrollo (user-secrets) y recomendaciones para producción.
 
 Dónde están los secretos (user-secrets)
