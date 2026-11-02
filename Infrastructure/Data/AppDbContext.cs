@@ -21,6 +21,7 @@ namespace Infrastructure.Data
         public DbSet<Provider> Providers { get; set; } = null!;
         public DbSet<LocalAccount> LocalAccounts { get; set; } = null!;
         public DbSet<AuditLog> AuditLogs { get; set; } = null!;
+        public DbSet<PasswordResetToken> PasswordResetTokens { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

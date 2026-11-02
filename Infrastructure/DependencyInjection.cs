@@ -27,6 +27,7 @@ namespace Infrastructure
             services.AddScoped<IInvitationRepository, InvitationRepository>();
             services.AddScoped<ITenantRepository, TenantRepository>();
             services.AddScoped<IUnitOfWork, UnitOfWork>();
+            services.AddScoped<IPasswordResetTokenRepository, PasswordResetTokenRepository>();
             // Email service: registered in Application layer implementation (if desired)
 
             return services;

@@ -4,10 +4,13 @@ using Domain.Dto;
 using Domain.Entities;
 using Domain.Request;
 using Domain.Response;
+using Konscious.Security.Cryptography;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using Infrastructure.Data;
 
 namespace Application.Services
 {
@@ -17,16 +20,26 @@ namespace Application.Services
         private readonly IIdentityRepository _identities;
         private readonly IOAuthAccountRepository _oauths;
         private readonly ILocalAccountRepository _localAccounts;
+        private readonly IPasswordResetTokenRepository _passwordResetTokens;
         private readonly ILocalAuthService _localAuthService;
         private readonly IRoleService _roleService;
         private readonly IUnitOfWork _unitOfWork;
 
-        public AuthenticationService(IProviderRepository providers, IIdentityRepository identities, IOAuthAccountRepository oauths, ILocalAccountRepository localAccounts, ILocalAuthService localAuthService, IRoleService roleService, IUnitOfWork unitOfWork)
+        public AuthenticationService(
+            IProviderRepository providers,
+            IIdentityRepository identities,
+            IOAuthAccountRepository oauths,
+            ILocalAccountRepository localAccounts,
+            IPasswordResetTokenRepository passwordResetTokens,
+            ILocalAuthService localAuthService,
+            IRoleService roleService,
+            IUnitOfWork unitOfWork)
         {
             _providers = providers;
             _identities = identities;
             _oauths = oauths;
             _localAccounts = localAccounts;
+            _passwordResetTokens = passwordResetTokens;
             _localAuthService = localAuthService;
             _roleService = roleService;
             _unitOfWork = unitOfWork;
@@ -181,6 +194,82 @@ namespace Application.Services
             };
 
             return response;
+        }
+
+        public async Task<ResetPasswordResult> ResetPasswordAsync(string code, string newPassword, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(code))
+                return ResetPasswordResult.InvalidCode;
+
+            if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 8)
+                return ResetPasswordResult.WeakPassword;
+
+            var normalizedCode = code.Trim();
+            var passwordResetToken = await _passwordResetTokens.GetByCodeAsync(normalizedCode, cancellationToken);
+            if (passwordResetToken == null)
+                return ResetPasswordResult.InvalidCode;
+
+            if (passwordResetToken.Used)
+                return ResetPasswordResult.CodeAlreadyUsed;
+
+            if (passwordResetToken.ExpiresAt <= DateTimeOffset.UtcNow)
+                return ResetPasswordResult.CodeExpired;
+
+            var (passwordHash, salt, algorithm) = await BuildPasswordHashAsync(newPassword);
+            var currentTimestamp = DateTimeOffset.UtcNow;
+
+            var localAccount = await _localAccounts.GetByIdentityIdAsync(passwordResetToken.IdentityId);
+            if (localAccount == null)
+            {
+                localAccount = new LocalAccount
+                {
+                    IdentityId = passwordResetToken.IdentityId,
+                    PasswordHash = passwordHash,
+                    Salt = salt,
+                    Algorithm = algorithm,
+                    CreatedAt = currentTimestamp,
+                    UpdatedAt = currentTimestamp
+                };
+
+                await _localAccounts.AddAsync(localAccount);
+            }
+            else
+            {
+                localAccount.PasswordHash = passwordHash;
+                localAccount.Salt = salt;
+                localAccount.Algorithm = algorithm;
+                localAccount.UpdatedAt = currentTimestamp;
+
+                await _localAccounts.UpdateAsync(localAccount);
+            }
+
+            passwordResetToken.Used = true;
+            await _passwordResetTokens.UpdateTokenAsync(passwordResetToken, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return ResetPasswordResult.Success;
+        }
+
+        private static async Task<(byte[] passwordHash, byte[] salt, string algorithm)> BuildPasswordHashAsync(string password)
+        {
+            var generatedSalt = new byte[16];
+            RandomNumberGenerator.Fill(generatedSalt);
+
+            var passwordBytes = Encoding.UTF8.GetBytes(password);
+            var degreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2);
+
+            var argon2 = new Argon2id(passwordBytes)
+            {
+                Salt = generatedSalt,
+                DegreeOfParallelism = degreeOfParallelism,
+                Iterations = 4,
+                MemorySize = 64 * 1024
+            };
+
+            var passwordHash = await argon2.GetBytesAsync(32);
+            var algorithm = $"argon2id$m=65536,t=4,p={degreeOfParallelism}";
+
+            return (passwordHash, generatedSalt, algorithm);
         }
     }
 }

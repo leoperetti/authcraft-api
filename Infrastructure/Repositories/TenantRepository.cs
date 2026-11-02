@@ -4,6 +4,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Repositories
 {
+    public interface ITenantRepository
+    {
+        Task<IReadOnlyList<Tenant>> ListAsync(CancellationToken cancellationToken = default);
+        Task<Tenant?> GetDomainById(long id, CancellationToken cancellationToken = default);
+        Task AddAsync(Tenant tenant, CancellationToken cancellationToken = default);
+        Task UpdateAsync(Tenant tenant, CancellationToken cancellationToken = default);
+        Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default);
+        Task<string> GetDomainByClient(string clientId, CancellationToken cancellationToken = default);
+    }
+
     public class TenantRepository : ITenantRepository
     {
         private readonly AppDbContext _dbContext;
@@ -21,7 +31,7 @@ namespace Infrastructure.Repositories
                 .ToListAsync(cancellationToken);
         }
 
-        public async Task<Tenant?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
+        public async Task<Tenant?> GetDomainById(long id, CancellationToken cancellationToken = default)
         {
             return await _dbContext.Tenants
                 .AsNoTracking()
@@ -52,5 +62,11 @@ namespace Infrastructure.Repositories
             await _dbContext.SaveChangesAsync(cancellationToken);
             return true;
         }
+
+        public async Task<string> GetDomainByClient(string clientId, CancellationToken cancellationToken = default) => await _dbContext.Tenants
+                .Where(tenant => tenant.ClientId == clientId)
+                .Select(tenant => tenant.PrimaryDomain)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(cancellationToken);
     }
 }

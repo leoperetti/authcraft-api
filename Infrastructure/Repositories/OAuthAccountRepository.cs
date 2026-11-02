@@ -4,6 +4,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Repositories
 {
+    public interface IOAuthAccountRepository
+    {
+        Task<OAuthAccount?> GetByProviderAndProviderUserIdAsync(int providerId, string providerUserId);
+        Task AddAsync(OAuthAccount oauth);
+        Task UpdateAsync(OAuthAccount oauth);
+    }
+
     public class OAuthAccountRepository : IOAuthAccountRepository
     {
         private readonly AppDbContext _db;

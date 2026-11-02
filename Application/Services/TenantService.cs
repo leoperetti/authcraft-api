@@ -39,7 +39,7 @@ namespace Application.Services
 
         public async Task<TenantDto?> GetAsync(long id, CancellationToken cancellationToken = default)
         {
-            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
+            var tenant = await _tenantRepository.GetDomainById(id, cancellationToken);
             return tenant is null ? null : Map(tenant);
         }
 
@@ -107,14 +107,14 @@ namespace Application.Services
             // Enviar email informando de la apertura de cuenta (si hay configuración SMTP, el servicio lo enviará)
             var subject = "Invitación para completar la apertura de cuenta";
             var body = $"Se ha creado una cuenta para su organización. Use el siguiente enlace para completar el registro: <a href=\"{invitationUrl}\">{invitationUrl}</a>";
-            _emailService.SendInvitation(request.OwnerEmail.Trim(), subject, body);
+            _emailService.SendEmail(request.OwnerEmail.Trim(), subject, body);
 
             return new CreateTenantResponse(Map(tenant), apiKeyPlain, invitationUrl);
         }
 
         public async Task<TenantDto?> UpdateAsync(long id, UpdateTenantRequest request, CancellationToken cancellationToken = default)
         {
-            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
+            var tenant = await _tenantRepository.GetDomainById(id, cancellationToken);
             if (tenant is null)
             {
                 return null;
@@ -151,7 +151,7 @@ namespace Application.Services
 
         public async Task<bool> UpdateStatusAsync(long id, string status, CancellationToken cancellationToken = default)
         {
-            var tenant = await _tenantRepository.GetByIdAsync(id, cancellationToken);
+            var tenant = await _tenantRepository.GetDomainById(id, cancellationToken);
             if (tenant is null)
             {
                 return false;

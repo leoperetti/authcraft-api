@@ -2,6 +2,7 @@ using Application.Audit;
 using Application.Interfaces;
 using Domain.Audit;
 using Domain.Dto;
+using Domain.Exceptions;
 using Domain.Request;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;

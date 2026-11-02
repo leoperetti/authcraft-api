@@ -71,6 +71,7 @@
     <Build Include="Tables\identities.sql" />
     <Build Include="Tables\memberships.sql" />
     <Build Include="Tables\invitations.sql" />
+    <Build Include="Tables\password_reset_tokens.sql" />
   </ItemGroup>
   <ItemGroup>
     <PostDeploy Include="postdeploys\Script.PostDeployment.sql" />

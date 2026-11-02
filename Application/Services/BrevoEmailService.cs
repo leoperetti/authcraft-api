@@ -1,7 +1,6 @@
 using Application.Interfaces;
 using brevo_csharp.Api;
 using brevo_csharp.Model;
-using Domain.Entities;
 using Microsoft.Extensions.Configuration;
 
 namespace Application.Services
@@ -14,7 +13,7 @@ namespace Application.Services
             _configuration = configuration;
         }
 
-        public void SendInvitation(string toEmail, string subject, string body)
+        public void SendEmail(string toEmail, string subject, string body)
         {
             // 1. Configura la API Key (obtenida de tu panel de Brevo)
             var apiKey = _configuration["Brevo:ApiKey"];

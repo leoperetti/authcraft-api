@@ -4,6 +4,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Repositories
 {
+    public interface IProviderRepository
+    {
+        Task<Provider?> GetByNameAsync(string name);
+        Task AddAsync(Provider provider);
+    }
+
     public class ProviderRepository : IProviderRepository
     {
         private readonly AppDbContext _db;

@@ -1,9 +1,10 @@
-using System.Threading;
-using System.Threading.Tasks;
-using Infrastructure.Repositories;
-
 namespace Infrastructure.Data
 {
+    public interface IUnitOfWork
+    {
+        Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+    }
+
     public class UnitOfWork : IUnitOfWork
     {
         private readonly AppDbContext _dbContext;

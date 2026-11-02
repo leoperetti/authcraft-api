@@ -15,5 +15,6 @@ namespace Domain.Entities
 
         public ICollection<OAuthAccount> OAuthAccounts { get; set; } = new List<OAuthAccount>();
         public ICollection<Membership> Memberships { get; set; } = new List<Membership>();
+        public ICollection<PasswordResetToken> PasswordResetTokens { get; set; } = new List<PasswordResetToken>();
     }
 }

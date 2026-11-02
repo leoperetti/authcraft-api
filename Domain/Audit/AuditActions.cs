@@ -6,5 +6,6 @@ namespace Domain.Audit
         public const string AssignRolesDenied = "AssignRolesDenied";
         public const string UserReadDenied = "UserReadDenied";
         public const string LoginFailed = "LoginFailed";
+        public const string ResetPassword = "ResetPassword";
     }
 }

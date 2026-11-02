@@ -2,6 +2,6 @@ namespace Application.Interfaces
 {
     public interface IEmailService
     {
-        void SendInvitation(string toEmail, string subject, string body);
+        void SendEmail(string toEmail, string subject, string body);
     }
 }

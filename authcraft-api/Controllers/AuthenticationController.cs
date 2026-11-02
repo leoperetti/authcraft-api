@@ -1,18 +1,21 @@
-﻿ using Microsoft.AspNetCore.Mvc;
+﻿using Application.Audit;
+using Application.Interfaces;
+using Domain.Audit;
+using Domain.Dto;
+using Domain.Request;
+using Domain.Response;
+using Domain.Exceptions;
+using Google.Apis.Auth;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
-using Google.Apis.Auth;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using System.ComponentModel.DataAnnotations;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using Application.Audit;
-using Application.Interfaces;
-using Domain.Audit;
-using Domain.Response;
-using Domain.Request;
-using Domain.Dto;
 
 namespace authcraft_api.Controllers
 {
@@ -25,14 +28,16 @@ namespace authcraft_api.Controllers
         private readonly ILocalAuthService _localAuthService;
         private readonly IRoleService _roleService;
         private readonly IAuditService _auditService;
+        private readonly IUserService _userService;
 
-        public AuthenticationController(IConfiguration configuration, Application.Interfaces.IAuthenticationService authService, ILocalAuthService localAuthService, IRoleService roleService, IAuditService auditService)
+        public AuthenticationController(IConfiguration configuration, Application.Interfaces.IAuthenticationService authService, ILocalAuthService localAuthService, IRoleService roleService, IAuditService auditService, IUserService userService)
         {
             _configuration = configuration;
             _authService = authService;
             _localAuthService = localAuthService;
             _roleService = roleService;
             _auditService = auditService;
+            _userService = userService;
         }
 
         private string GetJwtKey()
@@ -60,7 +65,7 @@ namespace authcraft_api.Controllers
         }
 
         [HttpPost("login")]
-        public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
+        public async Task<ActionResult<AuthResponse>> Login([FromBody] Domain.Request.LoginRequest request)
         {
             try
             {
@@ -206,6 +211,54 @@ namespace authcraft_api.Controllers
             };
 
             return Ok(response);
+        }
+
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken ct)
+        {
+            try
+            {
+                var user = await _userService.CheckIdentityByEmail(request);
+
+                var resetLink = await _userService.GenerateResetTokenAsync(user, request.ClientId, ct);
+
+                return Ok(new { ResetLink = resetLink });
+            }
+            catch (NotFoundException ex) { return NotFound(new { message = ex.Message }); }
+            catch (ValidationException ex) { return BadRequest(new { message = ex.Message }); }
+        }
+
+        public sealed record ResetPasswordRequest(string Code, string NewPassword);
+
+        [HttpPost("reset-password")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ResetPassword(
+            [FromBody] ResetPasswordRequest request,
+            CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.NewPassword))
+                return BadRequest(new { message = "Datos incompletos." });
+
+            if (request.NewPassword.Length < 8)
+                return BadRequest(new { message = "La contraseña debe tener al menos 8 caracteres." });
+
+            ResetPasswordResult result;
+            try
+            {
+                result = await _authService.ResetPasswordAsync(request.Code, request.NewPassword, ct);
+            }
+            catch (NotFoundException ex) { return NotFound(new { message = ex.Message }); }
+            catch (ValidationException ex) { return BadRequest(new { message = ex.Message }); }
+
+            return result switch
+            {
+                ResetPasswordResult.Success => NoContent(),          // 204
+                ResetPasswordResult.InvalidCode => BadRequest(new { message = "El enlace no es válido o ya expiró." }),
+                ResetPasswordResult.CodeExpired => BadRequest(new { message = "El enlace expiró. Solicitá uno nuevo." }),
+                ResetPasswordResult.CodeAlreadyUsed => BadRequest(new { message = "Este enlace ya fue utilizado." }),
+                ResetPasswordResult.WeakPassword => BadRequest(new { message = "La contraseña no cumple los requisitos." }),
+                _ => StatusCode(500, new { message = "Error inesperado." }),
+            };
         }
 
         [HttpPost("logout")]

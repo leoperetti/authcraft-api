@@ -4,6 +4,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Repositories
 {
+    public interface ILocalAccountRepository
+    {
+        Task<LocalAccount?> GetByIdentityIdAsync(long identityId);
+        Task AddAsync(LocalAccount localAccount);
+        Task UpdateAsync(LocalAccount localAccount);
+    }
+
     public class LocalAccountRepository : ILocalAccountRepository
     {
         private readonly AppDbContext _db;
