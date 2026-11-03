@@ -152,7 +152,8 @@ namespace authcraft_api.Controllers
             {
                 new Claim(ClaimTypes.NameIdentifier, payload.Subject ?? string.Empty),
                 new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
-                new Claim(ClaimTypes.Name, payload.Name ?? string.Empty)
+                new Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
+                new Claim("tenant", request.ClientId)
             };
 
             var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
@@ -174,6 +175,7 @@ namespace authcraft_api.Controllers
                 new Claim(JwtRegisteredClaimNames.Sub, identityRecord.Id.ToString()),
                 new Claim(ClaimTypes.Email, payload.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, payload.Name ?? string.Empty),
+                new Claim("tenant", request.ClientId)
             };
 
             // Añadir claims de roles del usuario si existen
