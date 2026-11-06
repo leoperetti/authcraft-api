@@ -1,5 +1,10 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$EvaluateSchema,
+    [string]$DacpacPath,
+    [string]$ManifestPath,
+    [string]$SqlPackagePath
+)
 
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true' -or
@@ -9,6 +14,13 @@ if ($env:GITHUB_ACTIONS -cne 'true' -or
     $env:GITHUB_RUN_ID -notmatch '^[1-9][0-9]*$' -or
     $env:GITHUB_SHA -notmatch '^[a-f0-9]{40}$') {
     throw 'Publisher verification requires an explicitly dispatched main run in this repository.'
+}
+if ($EvaluateSchema) {
+    foreach ($path in @($DacpacPath, $ManifestPath, $SqlPackagePath)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw 'Schema evaluation requires existing DACPAC, manifest, and SqlPackage files.'
+        }
+    }
 }
 
 $originalToken = [Environment]::GetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN')
@@ -66,6 +78,25 @@ try {
         $testResults[0].testName -cne 'authcraft_api.Tests.StagingPublisherSqlTests.OidcPublisherHasOnlyApprovedReviewPermissions') {
         throw 'Staging SQL verification was skipped, missing, or did not pass the exact required test.'
     }
+    $evaluation = $null
+    if ($EvaluateSchema) {
+        $evaluationOutput = & (Join-Path $PSScriptRoot 'Invoke-DatabaseDeployment.ps1') `
+            -Mode Evaluate -TargetEnvironment staging -DacpacPath $DacpacPath `
+            -ManifestPath $ManifestPath -SqlPackagePath $SqlPackagePath `
+            -ExpectedCommitSha $env:GITHUB_SHA -ExpectedRunId $env:GITHUB_RUN_ID
+        try {
+            $evaluation = ($evaluationOutput -join "`n") | ConvertFrom-Json
+        } catch {
+            throw 'Staging DacFx evaluation did not return valid evidence.'
+        }
+        if ($evaluation.state -cne 'evaluated' -or
+            $evaluation.target_environment -cne 'staging' -or
+            $evaluation.database_name -cne 'authcraft-db-staging' -or
+            $evaluation.commit_sha -cne $env:GITHUB_SHA -or
+            [string]$evaluation.run_id -cne $env:GITHUB_RUN_ID) {
+            throw 'Staging DacFx evaluation evidence does not match this run and destination.'
+        }
+    }
     [ordered]@{
         state = 'verified'
         verification = 'staging_publisher_sql_review_only'
@@ -73,6 +104,7 @@ try {
         run_id = $env:GITHUB_RUN_ID
         commit_sha = $env:GITHUB_SHA
         deployment_authorized = $false
+        schema_evaluation = $evaluation
     } | ConvertTo-Json -Compress
 }
 finally {

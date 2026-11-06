@@ -152,6 +152,13 @@ No agregar tablas para el modelo operativo de publicaciones.
   Usuario autorizo solo preparacion local: no commit/push/dispatch. T037 pendiente
   de ejecucion autentica y permisos DacFx de publicacion revisados.
 
+  Evidencia posterior: run Actions 42265429985, commit
+  5f3ea0d248fa002e2b2dcfa0be337e269614bb0e, validate y verify-staging-publisher
+  success. Login OIDC real/usuario/SID/grants de revision ya comprobados; no Publish.
+  Preparado diagnostico opt-in evaluate_staging_schema para DeployReport/Script
+  del DACPAC/manifiesto del mismo run, con evidencia retenida y sin ampliar grants.
+  T037 sigue pendiente de DacFx y permisos de publicacion revisados/probados.
+
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 - [ ] T039 [US3] Implementar registro en el resumen/artefacto protegido de `.github\workflows\main_authcraft-api.yml` de DeploymentAttempt con "`result`: pending | blocked | failed | succeeded.", timestamps, versión/destino y resultados preflight/esquema/API/salud/autenticación; CandidateRelease con "`state`: built | staging_failed | staging_validated | awaiting_approval | production_blocked | approved | production_failed | published.", marcando production_blocked tras staging sin aprobación disponible y sin sugerir que production fue publicado; verificar estados con ejecuciones simuladas antes de activar el workflow.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.

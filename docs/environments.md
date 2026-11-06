@@ -9,18 +9,19 @@ pruebas. No pertenecen a esta feature y no se revierten. La solucion ya incluye
 El workflow production remoto (ID `374894897`) esta `disabled_manually`; el de
 staging (ID `407226559`) permanece `active`. El commit remoto main verificado es
 `091fe2c9856fa8ba46387bc3e751fd21ca424662`. No se modifico el servicio production.
-El workflow staging remoto sigue sin cumplir el nuevo recorrido de esquema/aprobacion.
-No hacer push a main hasta reconciliar el workflow local/remoto y retirar publicadores
-paralelos.
+El workflow staging remoto sigue sin cumplir el recorrido completo de
+esquema/aprobacion/publicacion. Ahora solo valida paquetes y permite diagnostico
+manual OIDC/SQL, como acredita la ejecucion descrita al final de esta guia.
+No habilitar publicacion hasta satisfacer los gates pendientes.
 
 Revision de Actions 2026-11-06: el workflow staging remoto sigue activo y su ultima
 ejecucion (`41882690684`) fallo en `Build with dotnet` con `MSB4278` al intentar
 cargar el `.sqlproj` tradicional desde el build de la solucion; el job de despliegue
 quedo omitido. El workflow staging local ahora es una propuesta de validacion de
 paquetes: compila API, pruebas y DACPAC por separado y solo genera artefactos en un
-`workflow_dispatch` de `main`. No tiene pasos de publicacion; ahora incluye un job
-OIDC opcional de diagnostico SQL de solo lectura, descrito abajo. Aun no se subio
-ni reemplazo el workflow remoto, y esta propuesta no despliega a Azure.
+`workflow_dispatch` de `main`. Esta version ya reemplazo el workflow staging remoto
+con autorizacion; no tiene pasos de publicacion. Incluye un job OIDC opcional de
+diagnostico SQL de solo lectura, descrito abajo. No despliega a Azure.
 
 Production permanece pendiente de aprobacion protegida compatible para este
 repositorio privado. No se cambia visibilidad, contrata ni modifica CEKIDE.
@@ -460,3 +461,40 @@ permisos comprobados en LocalDB; cero bases descartables restantes. Build SQL y
 parser PowerShell satisfactorios. Las pruebas del workflow comprueban su estructura
 y gates especificos; no sustituyen el parser/runner de GitHub. No hubo conexiones
 Azure, cambios remotos, commit, push ni dispatch en esta preparacion.
+
+### Diagnostico OIDC real satisfactorio y siguiente evaluacion DacFx
+
+Posteriormente el usuario autorizo commit/push y diagnostico. La primera ejecucion
+`42264664298` fallo en pruebas, antes de Azure: los procesos Windows PowerShell del
+runner no resolvian Get-FileHash. Se agrego el directorio de modulos Windows
+PowerShell a PSModulePath solo durante ese paso y se comprueba su disponibilidad
+antes de ejecutar las pruebas; no se omiten casos ni se cambian permisos.
+
+La ejecucion [42265429985](https://github.com/leoperetti/authcraft-api/actions/runs/42265429985)
+del commit `5f3ea0d248fa002e2b2dcfa0be337e269614bb0e` termino success en los jobs
+`validate` y `verify-staging-publisher`. API, DACPAC y release-manifest quedaron
+retenidos/no expirados al consultar Actions. El segundo job verifico login OIDC,
+usuario/SID y permisos SQL reales con el token del publicador, no por impersonacion.
+No ejecuto Publish, no desplego API ni concedio permisos. Production permanece
+disabled_manually. Este run no acredita un deploy-staging satisfactorio ni
+capacidad DacFx de publicacion: T037 sigue pendiente.
+
+Siguiente diagnostico preparado localmente: input `evaluate_staging_schema`,
+default false, tambien exige workflow_dispatch main y ejecuta primero el check
+de identidad/permisos. Descarga DACPAC/manifiesto del mismo run con download-artifact
+sin run-id externo. Resuelve SqlPackage de Visual Studio mediante vswhere y falla
+explicitamente si no existe; no instala herramientas ni modifica firewall.
+El wrapper reutiliza `Invoke-DatabaseDeployment.ps1` exclusivamente con
+Mode=Evaluate/TargetEnvironment=staging y el token transitorio ya comprobado.
+El helper valida commit/run/hash del DACPAC antes de invocar DeployReport/Script.
+Nunca se llama Publish. Conserva las opciones SQL/TLS existentes y rechaza planes
+destructivos. Reporte/script se retienen en el artefacto privado
+`staging-schema-review` durante 30 dias solo si la evaluacion tuvo exito.
+
+La evaluacion puede fallar por permisos DacFx insuficientes aun con login correcto;
+ese fallo es evidencia de bloqueo, no autorizacion para ampliar grants. El postdeploy
+se genera para revision, no se ejecuta. La salida mantiene deployment_authorized=false.
+Las pruebas controladas cubren evaluacion correcta, fallo SqlPackage, DACPAC alterado
+y archivos faltantes, comprobando que solo se invocan DeployReport/Script y que se
+restaura el entorno. Este diagnostico no sustituye preflight de publicacion,
+revision SQL acreditada ni aprobacion Production.

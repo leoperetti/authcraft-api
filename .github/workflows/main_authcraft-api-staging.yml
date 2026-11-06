@@ -11,6 +11,11 @@ on:
         type: boolean
         required: false
         default: false
+      evaluate_staging_schema:
+        description: Generate Staging DacFx report/script, including publisher verification (no Publish)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -109,7 +114,7 @@ jobs:
           retention-days: 30
 
   verify-staging-publisher:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_staging_publisher == true
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.verify_staging_publisher == true || inputs.evaluate_staging_schema == true)
     needs: validate
     runs-on: windows-latest
     timeout-minutes: 10
@@ -127,6 +132,20 @@ jobs:
       - name: Build SQL verification tests
         run: dotnet build authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release
 
+      - name: Download this run's DACPAC for read-only evaluation
+        if: inputs.evaluate_staging_schema == true
+        uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          path: ${{ runner.temp }}/staging-schema-review
+
+      - name: Download this run's release manifest
+        if: inputs.evaluate_staging_schema == true
+        uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/staging-schema-review
+
       - name: Login as staging publisher via OIDC
         uses: azure/login@v2
         with:
@@ -136,8 +155,40 @@ jobs:
 
       - name: Verify staging SQL login and review-only permissions
         shell: pwsh
+        env:
+          EVALUATE_STAGING_SCHEMA: ${{ inputs.evaluate_staging_schema }}
         run: |
-          & .\scripts\Test-StagingPublisher.ps1
+          $parameters = @{}
+          if ($env:EVALUATE_STAGING_SCHEMA -eq 'true') {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $installation = & $vswhere -latest -products '*' -property installationPath
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installation)) {
+              throw 'Visual Studio installation could not be resolved.'
+            }
+            $sqlPackage = Join-Path $installation 'Common7\IDE\Extensions\Microsoft\SQLDB\DAC\SqlPackage.exe'
+            if (-not (Test-Path -LiteralPath $sqlPackage -PathType Leaf)) {
+              throw 'SqlPackage is unavailable; no schema evaluation authorized.'
+            }
+            $evidenceDirectory = Join-Path $env:RUNNER_TEMP 'staging-schema-review'
+            $parameters = @{
+              EvaluateSchema = $true
+              DacpacPath = Join-Path $evidenceDirectory 'authcraft-db.dacpac'
+              ManifestPath = Join-Path $evidenceDirectory 'release-manifest.json'
+              SqlPackagePath = $sqlPackage
+            }
+          }
+          & .\scripts\Test-StagingPublisher.ps1 @parameters
           if ($LASTEXITCODE -ne 0) { throw 'Staging publisher verification failed.' }
           'Staging SQL review identity verified. No deployment authorized or attempted.' |
             Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Retain read-only schema evaluation evidence
+        if: success() && inputs.evaluate_staging_schema == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-schema-review
+          path: |
+            ${{ runner.temp }}/staging-schema-review/staging-deploy-report.xml
+            ${{ runner.temp }}/staging-schema-review/staging-deploy.sql
+          if-no-files-found: error
+          retention-days: 30

@@ -26,7 +26,10 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("needs: validate", diagnostic, StringComparison.Ordinal);
         Assert.Contains("id-token: write", diagnostic, StringComparison.Ordinal);
         Assert.Contains("Test-StagingPublisher.ps1", diagnostic, StringComparison.Ordinal);
-        Assert.DoesNotContain("upload-artifact", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("inputs.evaluate_staging_schema == true", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("name: staging-schema-review", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("success() && inputs.evaluate_staging_schema == true", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("actions/download-artifact@v4", diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain("webapps-deploy", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sql-action", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Invoke-DatabaseDeployment", workflow, StringComparison.OrdinalIgnoreCase);
@@ -47,6 +50,10 @@ public sealed class StagingPublisherVerificationTests
     [InlineData("missing-report", false)]
     [InlineData("skipped-test", false)]
     [InlineData("wrong-test", false)]
+    [InlineData("evaluate-success", true)]
+    [InlineData("evaluate-failure", false)]
+    [InlineData("evaluate-tamper", false)]
+    [InlineData("evaluate-missing-input", false)]
     public async Task Diagnostic_RequiresExpectedIdentityAndOneExecutedSqlCheck(string scenario, bool succeeds)
     {
         var repository = FindRepositoryRoot();
@@ -56,6 +63,22 @@ public sealed class StagingPublisherVerificationTests
         {
             var scriptPath = Path.Combine(directory, "harness.ps1");
             var logPath = Path.Combine(directory, "commands.log");
+            File.WriteAllText(Path.Combine(directory, "sqlpackage.ps1"), """
+                $action = @($args | Where-Object { $_ -like '/Action:*' })[0]
+                [IO.File]::AppendAllText($env:AUTHCRAFT_WRAPPER_LOG, "$action`n")
+                if ($action -notin @('/Action:DeployReport', '/Action:Script')) {
+                    throw 'Modification must never be attempted'
+                }
+                if ($env:AUTHCRAFT_WRAPPER_SCENARIO -eq 'evaluate-failure') { exit 1 }
+                if ($action -eq '/Action:DeployReport') {
+                    $path = @($args | Where-Object { $_ -like '/OutputPath:*' })[0].Substring('/OutputPath:'.Length)
+                    [IO.File]::WriteAllText($path, '<DeployReport />')
+                } else {
+                    $path = @($args | Where-Object { $_ -like '/DeployScriptPath:*' })[0].Substring('/DeployScriptPath:'.Length)
+                    [IO.File]::WriteAllText($path, 'CREATE TABLE dbo.synthetic_test (id INT);')
+                }
+                exit 0
+                """);
             File.WriteAllText(scriptPath, """
                 param([string]$Repository, [string]$Scenario)
                 $ErrorActionPreference = 'Stop'
@@ -109,8 +132,27 @@ public sealed class StagingPublisherVerificationTests
                 }
                 $env:AUTHCRAFT_SQL_ACCESS_TOKEN = 'original-token'
                 $env:AUTHCRAFT_VERIFY_STAGING_PUBLISHER = 'original-opt-in'
+                $parameters = @{}
+                if ($Scenario -like 'evaluate-*') {
+                    $dacpac = Join-Path $PSScriptRoot 'database.dacpac'
+                    $manifest = Join-Path $PSScriptRoot 'manifest.json'
+                    [IO.File]::WriteAllText($dacpac, 'synthetic-dacpac')
+                    @{
+                        commit_sha = $env:GITHUB_SHA
+                        run_id = $env:GITHUB_RUN_ID
+                        database = @{artifact = 'dacpac';sha256 = (Get-FileHash -LiteralPath $dacpac -Algorithm SHA256).Hash.ToLowerInvariant()}
+                    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifest
+                    if ($Scenario -eq 'evaluate-tamper') { [IO.File]::AppendAllText($dacpac, 'tampered') }
+                    $parameters = @{
+                        EvaluateSchema = $true
+                        DacpacPath = $dacpac
+                        ManifestPath = $manifest
+                        SqlPackagePath = Join-Path $PSScriptRoot 'sqlpackage.ps1'
+                    }
+                    if ($Scenario -eq 'evaluate-missing-input') { $parameters.Remove('ManifestPath') }
+                }
                 try {
-                    & (Join-Path $Repository 'scripts\Test-StagingPublisher.ps1')
+                    & (Join-Path $Repository 'scripts\Test-StagingPublisher.ps1') @parameters
                 } finally {
                     if ($env:AUTHCRAFT_SQL_ACCESS_TOKEN -cne 'original-token' -or
                         $env:AUTHCRAFT_VERIFY_STAGING_PUBLISHER -cne 'original-opt-in') {
@@ -134,6 +176,7 @@ public sealed class StagingPublisherVerificationTests
                 processInfo.ArgumentList.Add(argument);
             }
             processInfo.Environment["AUTHCRAFT_WRAPPER_LOG"] = logPath;
+            processInfo.Environment["AUTHCRAFT_WRAPPER_SCENARIO"] = scenario;
             processInfo.Environment["TEMP"] = directory;
             processInfo.Environment["TMP"] = directory;
             processInfo.Environment["GITHUB_ACTIONS"] = scenario == "not-actions" ? "false" : "true";
@@ -159,7 +202,22 @@ public sealed class StagingPublisherVerificationTests
             if (succeeds)
             {
                 Assert.Contains("\"deployment_authorized\":false", output, StringComparison.Ordinal);
-                Assert.Equal(3, File.ReadAllLines(logPath).Length);
+                Assert.Equal(scenario == "evaluate-success" ? 5 : 3, File.ReadAllLines(logPath).Length);
+                if (scenario == "evaluate-success")
+                {
+                    Assert.Contains("\"state\":\"evaluated\"", output, StringComparison.Ordinal);
+                    Assert.Equal(
+                        ["/Action:DeployReport", "/Action:Script"],
+                        File.ReadAllLines(logPath).Where(command => command.StartsWith("/Action:", StringComparison.Ordinal)));
+                }
+            }
+            if (File.Exists(logPath))
+            {
+                Assert.DoesNotContain("/Action:Publish", File.ReadAllText(logPath), StringComparison.Ordinal);
+                if (scenario == "evaluate-tamper")
+                {
+                    Assert.DoesNotContain("/Action:", File.ReadAllText(logPath), StringComparison.Ordinal);
+                }
             }
             if (scenario is "wrong-ref" or "pull-request" or "wrong-repository" or "not-actions")
             {

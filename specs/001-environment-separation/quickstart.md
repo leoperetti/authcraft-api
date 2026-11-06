@@ -160,23 +160,28 @@ Medir preparación ≤30 minutos con prerrequisitos disponibles.
 
 ## 4. Staging, únicamente con autorización
 
-Al 2026-11-06, GitHub todavía tiene activo el workflow staging anterior: su último
-run fallo en el build de la solucion (`MSB4278`) y no ejecuto el despliegue. La
-propuesta local en `.github/workflows/main_authcraft-api-staging.yml` separa los
-builds API/SQL y genera artefactos, pero no publica. Ahora incluye un diagnostico
-OIDC/SQL opcional, aun sin subir ni ejecutar: input
-`verify_staging_publisher=false` por defecto. El usuario autorizo solo preparacion
-local, sin commit/push. No ejecutar el diagnostico remoto hasta aprobar expresamente
-su publicacion/dispatch; no confundirlo con autorizar un despliegue.
+Al 2026-11-06 el workflow staging remoto ya fue reemplazado con autorización por
+la versión sin despliegue. El run
+[42265429985](https://github.com/leoperetti/authcraft-api/actions/runs/42265429985)
+pasó build/pruebas/paquetes y diagnóstico OIDC/SQL real con
+`verify_staging_publisher=true`. No acredita un despliegue ni permisos Publish.
+Los inputs remotos son diagnósticos explícitos, no aprobación de despliegue.
 
-Una vez revisado y autorizado el commit/push del workflow sin despliegue, se podra
-despachar en main con `verify_staging_publisher=true`. Primero valida/crea los
+Con autorización se puede despachar en main con `verify_staging_publisher=true`.
+Primero valida/crea los
 paquetes, luego autentica exclusivamente como publicador staging y consulta sus
 permisos reales en `authcraft-db-staging`. No configura firewall ni concede permisos.
 Cuenta equivocada, fallo SQL o prueba omitida bloquean. Solo un test ejecutado y
 aprobado acredita el login; `deployment_authorized` permanece false.
 Ver [limites del diagnostico](../../docs/environments.md#diagnostico-oidc-preparado-sin-ejecutar-remotamente).
 Este diagnostico puede reactivar SQL pausado y no prueba aun permisos DacFx Publish.
+
+La ampliación local `evaluate_staging_schema=true` incluye el diagnóstico anterior
+y genera DeployReport/Script con el mismo token, DACPAC/manifiesto del run y opciones
+seguras. No requiere activar ambos inputs. Guarda reporte/script por 30 días en
+`staging-schema-review` solo tras éxito; nunca ejecuta Publish ni postdeploy.
+Requiere revisar y autorizar la nueva versión antes de subirla/ejecutarla.
+Si falta SqlPackage o permisos, bloquea sin instalar, ampliar grants ni cambiar red.
 
 Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
 y retirar rutas production, publicar un commit main desde el único flujo vigente.
