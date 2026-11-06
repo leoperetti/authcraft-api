@@ -118,6 +118,17 @@ public sealed class LocalEnvironmentSqlTests
         await using (var reader = await command.ExecuteReaderAsync())
         {
             Assert.True(await reader.ReadAsync());
+            Assert.Equal(0, reader.GetInt32(reader.GetOrdinal("can_read_dependencies")));
+            Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StagingPublisherSqlTests.AssertReviewPermissions(reader));
+        }
+
+        command.CommandText = """
+            GRANT SELECT ON OBJECT::sys.sql_expression_dependencies TO [authcraft_schema_review_test];
+            EXECUTE AS USER = N'authcraft_schema_review_test';
+            """ + "\n" + StagingPublisherSqlTests.ReviewPermissionQuery + "\nREVERT;";
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
             StagingPublisherSqlTests.AssertReviewPermissions(reader);
             Assert.Equal(13, reader.GetInt32(reader.GetOrdinal("visible_table_count")));
         }

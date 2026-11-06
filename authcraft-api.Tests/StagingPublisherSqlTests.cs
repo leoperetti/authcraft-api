@@ -64,6 +64,7 @@ public sealed class StagingPublisherSqlTests
     {
         Assert.Equal(1, reader.GetInt32(reader.GetOrdinal("can_connect")));
         Assert.Equal(1, reader.GetInt32(reader.GetOrdinal("can_view_definition")));
+        Assert.Equal(1, reader.GetInt32(reader.GetOrdinal("can_read_dependencies")));
         Assert.True(reader.GetInt32(reader.GetOrdinal("visible_table_count")) > 0);
         foreach (var permission in new[]
                  {
@@ -81,6 +82,7 @@ public sealed class StagingPublisherSqlTests
                    CONVERT(varchar(36), CONVERT(uniqueidentifier, sid)) AS application_id,
                    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONNECT') AS can_connect,
                    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION') AS can_view_definition,
+                   HAS_PERMS_BY_NAME('sys.sql_expression_dependencies', 'OBJECT', 'SELECT') AS can_read_dependencies,
                    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'ALTER') AS can_alter,
                    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONTROL') AS can_control,
                    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE') AS can_create_table,
@@ -93,7 +95,9 @@ public sealed class StagingPublisherSqlTests
                     WHERE member_principal_id = USER_ID()) AS explicit_role_count,
                    (SELECT COUNT(*) FROM sys.database_permissions
                     WHERE grantee_principal_id = USER_ID()
-                      AND NOT (class = 0 AND state = 'G' AND permission_name IN ('CONNECT', 'VIEW DEFINITION'))) AS unapproved_grant_count,
+                      AND NOT (class = 0 AND state = 'G' AND permission_name IN ('CONNECT', 'VIEW DEFINITION'))
+                      AND NOT (class = 1 AND state = 'G' AND permission_name = 'SELECT'
+                               AND major_id = OBJECT_ID('sys.sql_expression_dependencies') AND minor_id = 0)) AS unapproved_grant_count,
                    (SELECT COUNT(*) FROM sys.tables AS table_metadata
                     WHERE table_metadata.is_ms_shipped = 0 AND
                       (HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(table_metadata.schema_id)) + '.' + QUOTENAME(table_metadata.name), 'OBJECT', 'INSERT') = 1 OR
