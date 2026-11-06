@@ -40,7 +40,14 @@ jobs:
         run: dotnet build authcraft-api/authcraft-api.csproj --configuration Release
 
       - name: Run focused environment and pipeline tests
-        run: dotnet test authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~Environment|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~StagingReleaseSmokeTests|FullyQualifiedName~DeploymentRecoveryTests|FullyQualifiedName~DatabaseDeploymentReviewTests|FullyQualifiedName~ProductionApprovalTests|FullyQualifiedName~StagingPublisherVerificationTests"
+        shell: pwsh
+        run: |
+          $windowsPowerShellModules = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
+          $env:PSModulePath = "$windowsPowerShellModules;$env:PSModulePath"
+          & powershell.exe -NoProfile -NonInteractive -Command "Get-Command Get-FileHash -ErrorAction Stop | Out-Null"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell hashing module is unavailable.' }
+          dotnet test authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~Environment|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~StagingReleaseSmokeTests|FullyQualifiedName~DeploymentRecoveryTests|FullyQualifiedName~DatabaseDeploymentReviewTests|FullyQualifiedName~ProductionApprovalTests|FullyQualifiedName~StagingPublisherVerificationTests"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused environment and pipeline tests failed.' }
 
       - name: Build SQL project and DACPAC
         run: msbuild authcraft-db/authcraft-db.sqlproj /p:Configuration=Release
