@@ -117,6 +117,9 @@ function Invoke-SqlPackage {
             $matchedChecks = @($permissionChecks.GetEnumerator() | Where-Object {
                 [Regex]::IsMatch($diagnosticText, $_.Value)
             } | ForEach-Object { $_.Key })
+            $deniedSystemObjects = @([Regex]::Matches($diagnosticText,
+                '(?i)\bSELECT permission (?:was )?denied on (?:the )?object [''"](?<object>[a-z_][a-z0-9_]{0,127})[''"][^\r\n]*\bschema [''"]sys[''"]') |
+                ForEach-Object { 'sys.' + $_.Groups['object'].Value } | Sort-Object -Unique)
             $category = 'unclassified'
             if ($diagnosticText -match '(?i)VIEW DATABASE (?:PERFORMANCE |SECURITY )?STATE') {
                 $category = 'database_state_permission'
@@ -127,7 +130,7 @@ function Invoke-SqlPackage {
             } elseif ($diagnosticText -match '(?i)connection.*timeout|server was not found|database.*unavailable|firewall') {
                 $category = 'connectivity'
             }
-            $script:sqlPackageFailure = "exit_code=$exitCode; diagnostic_category=$category; diagnostic_codes=$($codes -join ','); mentioned_permissions=$($mentionedPermissions -join ','); permission_checks=$($matchedChecks -join ',')"
+            $script:sqlPackageFailure = "exit_code=$exitCode; diagnostic_category=$category; diagnostic_codes=$($codes -join ','); mentioned_permissions=$($mentionedPermissions -join ','); permission_checks=$($matchedChecks -join ','); denied_system_objects=$($deniedSystemObjects -join ',')"
         }
         return $exitCode
     }

@@ -70,7 +70,7 @@ public sealed class StagingPublisherVerificationTests
                     throw 'Modification must never be attempted'
                 }
                 if ($env:AUTHCRAFT_WRAPPER_SCENARIO -eq 'evaluate-failure') {
-                    Write-Output 'Error SQL72014: VIEW DATABASE STATE permission denied; The user does not have permission to alter the database. SELECT permission was denied on the object sql_expression_dependencies. sensitive-native-diagnostic synthetic.test.token'
+                    Write-Output "Error SQL72014: VIEW DATABASE STATE permission denied; The user does not have permission to alter the database. SELECT permission was denied on the object 'sql_expression_dependencies', database 'synthetic', schema 'sys'. sensitive-native-diagnostic synthetic.test.token"
                     exit 1
                 }
                 if ($action -eq '/Action:DeployReport') {
@@ -208,6 +208,7 @@ public sealed class StagingPublisherVerificationTests
                 var compactError = string.Concat(error.Where(character => !char.IsWhiteSpace(character)));
                 Assert.Contains("mentioned_permissions=VIEWDATABASESTATE,ALTER,SELECT", compactError, StringComparison.Ordinal);
                 Assert.Contains("permission_checks=sql_expression_dependencies_select_denied,alter_database_denied", compactError, StringComparison.Ordinal);
+                Assert.Contains("denied_system_objects=sys.sql_expression_dependencies", compactError, StringComparison.Ordinal);
             }
             Assert.DoesNotContain("Process environment was not restored", error, StringComparison.Ordinal);
             Assert.Empty(Directory.GetDirectories(directory, "authcraft-publisher-check-*"));
