@@ -180,8 +180,12 @@ La ampliación local `evaluate_staging_schema=true` incluye el diagnóstico ante
 y genera DeployReport/Script con el mismo token, DACPAC/manifiesto del run y opciones
 seguras. No requiere activar ambos inputs. Guarda reporte/script por 30 días en
 `staging-schema-review` solo tras éxito; nunca ejecuta Publish ni postdeploy.
-Requiere revisar y autorizar la nueva versión antes de subirla/ejecutarla.
 Si falta SqlPackage o permisos, bloquea sin instalar, ampliar grants ni cambiar red.
+Esta ampliación ya se subió/ejecutó con autorización: el run
+[42269089780](https://github.com/leoperetti/authcraft-api/actions/runs/42269089780)
+pasó login, pero DeployReport falló con `diagnostic_category=permission_denied`.
+No hay plan aprobado ni permisos DacFx suficientes acreditados. El error no
+identifica el grant faltante; no ampliar permisos por inferencia.
 
 Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
 y retirar rutas production, publicar un commit main desde el único flujo vigente.

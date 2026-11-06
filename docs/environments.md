@@ -498,3 +498,38 @@ Las pruebas controladas cubren evaluacion correcta, fallo SqlPackage, DACPAC alt
 y archivos faltantes, comprobando que solo se invocan DeployReport/Script y que se
 restaura el entorno. Este diagnostico no sustituye preflight de publicacion,
 revision SQL acreditada ni aprobacion Production.
+
+### Resultado real de evaluacion DacFx: bloqueado por permisos
+
+El usuario autorizo subir y ejecutar este diagnostico de solo lectura.
+Run [42267628280](https://github.com/leoperetti/authcraft-api/actions/runs/42267628280),
+commit `c5924986b775a81231db8625fdafd0d16686459e`: validate satisfactorio,
+login/chequeo de permisos satisfactorio y fallo en SqlPackage DeployReport.
+No se ejecutaron Script ni Publish; el artefacto de revision SQL no se genero.
+
+Se agrego diagnostico sanitizado de SqlPackage: solo codigo de salida,
+categoria fija y codigos SQL numericos prefijados, sin salida nativa libre.
+La salida se captura transitoriamente en memoria y se descarta; las pruebas
+verifican que un token sintetico y texto nativo no aparecen en el error.
+Las categorias son orientativas: no identifican por si mismas el grant faltante.
+
+Run [42269089780](https://github.com/leoperetti/authcraft-api/actions/runs/42269089780),
+commit `5c4f31707145bcbba393ff67b233fcf91cb8710b`: validate satisfactorio;
+el diagnostico volvio a pasar login/usuario/permisos y fallo en DeployReport con
+`exit_code=1`, `diagnostic_category=permission_denied`, sin codigo SQL especifico.
+SqlPackage si estaba disponible en el runner; no se trata de falta de herramienta.
+No atribuir el fallo a VIEW DATABASE STATE ni concederlo por inferencia: la evidencia
+actual solo identifica la categoria, no el permiso concreto denegado.
+
+**T033/T037 siguen bloqueadas para DacFx**. CONNECT/VIEW DEFINITION permitieron
+login y consulta de catalogos, pero no alcanzaron para esta evaluacion con DacFx.
+Siguiente paso: identificar el permiso concreto requerido y ensayar el minimo
+en un destino descartable antes de solicitar/aplicar otra correccion staging.
+No conceder db_owner/administracion de servidor como atajo, ni usar el token
+administrativo de auditoria para hacer pasar el workflow del publicador.
+
+Validacion de los cambios: **74/74 pruebas focalizadas** locales satisfactorias
+antes de cada push; ambos runs confirmaron el job validate. No se ampliaron grants,
+modifico firewall, publico API, ejecuto postdeploy ni conecto Production durante
+estos diagnosticos. Los paquetes retenidos de estos runs no acreditan un release
+staging desplegado/validado ni sustituyen la revision SQL previa a Publish.
