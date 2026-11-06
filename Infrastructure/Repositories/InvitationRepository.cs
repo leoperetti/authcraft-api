@@ -10,6 +10,9 @@ namespace Infrastructure.Repositories
         Task AddAsync(Invitation invitation, CancellationToken cancellationToken = default);
         Task<bool> HasPendingAsync(long tenantId, string email, CancellationToken cancellationToken = default);
         Task<ResolvedInvitationDto?> GetByCodeAsync(string invitationCode, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<InvitationDto>> ListPendingAsync(long tenantId, CancellationToken cancellationToken = default);
+        Task<Invitation?> GetUnusedByIdAsync(long tenantId, long invitationId, CancellationToken cancellationToken = default);
+        Task<Invitation?> GetAcceptedByIdAsync(long tenantId, long invitationId, long identityId, CancellationToken cancellationToken = default);
     }
 
     public class InvitationRepository : IInvitationRepository
@@ -44,6 +47,51 @@ namespace Infrastructure.Repositories
                 && (!invitation.ExpiresAt.HasValue || invitation.ExpiresAt > now), cancellationToken);
         }
 
+        public async Task<IReadOnlyList<InvitationDto>> ListPendingAsync(long tenantId, CancellationToken cancellationToken = default)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            var pending = await _dbContext.Invitations
+                .AsNoTracking()
+                .Where(invitation => invitation.TenantId == tenantId
+                    && !invitation.Used
+                    && (!invitation.ExpiresAt.HasValue || invitation.ExpiresAt > now))
+                .ToListAsync(cancellationToken);
+
+            return pending
+                .OrderByDescending(invitation => invitation.CreatedAt)
+                .Select(invitation => new InvitationDto
+                {
+                    Id = invitation.Id,
+                    Email = invitation.Email,
+                    CreatedAt = invitation.CreatedAt,
+                    ExpiresAt = invitation.ExpiresAt
+                })
+                .ToList();
+        }
+
+        public async Task<Invitation?> GetUnusedByIdAsync(long tenantId, long invitationId, CancellationToken cancellationToken = default)
+        {
+            return await _dbContext.Invitations.FirstOrDefaultAsync(invitation =>
+                invitation.Id == invitationId
+                && invitation.TenantId == tenantId
+                && !invitation.Used, cancellationToken);
+        }
+
+        public async Task<Invitation?> GetAcceptedByIdAsync(long tenantId, long invitationId, long identityId, CancellationToken cancellationToken = default)
+        {
+            return await _dbContext.Invitations
+                .AsNoTracking()
+                .SingleOrDefaultAsync(invitation =>
+                    invitation.Id == invitationId
+                    && invitation.TenantId == tenantId
+                    && invitation.Purpose == "gym_student"
+                    && invitation.Used
+                    && invitation.AcceptedIdentityId == identityId
+                    && invitation.AcceptedAt != null,
+                    cancellationToken);
+        }
+
         public async Task<ResolvedInvitationDto?> GetByCodeAsync(string invitationCode, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(invitationCode))
@@ -62,7 +110,18 @@ namespace Infrastructure.Repositories
                     ExpiresAt = invitation.ExpiresAt,
                     Used = invitation.Used,
                     TenantName = invitation.Tenant.Name,
-                    TenantSlug = invitation.Tenant.Slug
+                    TenantSlug = invitation.Tenant.Slug,
+                    StudentProfile = invitation.Purpose == "gym_student"
+                        ? new Domain.Response.ResolvedStudentInvitationProfileResponse
+                        {
+                            FirstName = invitation.FirstName,
+                            LastName = invitation.LastName,
+                            FullName = invitation.FullName ?? string.Empty,
+                            PhoneNumber = invitation.PhoneNumber,
+                            Dni = invitation.Dni
+                        }
+                        : null,
+                    DniRequired = invitation.Purpose == "gym_student"
                 })
                 .FirstOrDefaultAsync(cancellationToken);
         }

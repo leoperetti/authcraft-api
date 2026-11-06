@@ -1,3 +1,5 @@
+using Domain.Response;
+
 namespace Domain.Dto
 {
     public class ResolvedInvitationDto
@@ -7,5 +9,7 @@ namespace Domain.Dto
         public bool Used { get; set; }
         public string TenantName { get; set; } = string.Empty;
         public string TenantSlug { get; set; } = string.Empty;
+        public ResolvedStudentInvitationProfileResponse? StudentProfile { get; set; }
+        public bool DniRequired { get; set; }
     }
 }

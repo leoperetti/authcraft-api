@@ -1,5 +1,6 @@
 ﻿using Application.Audit;
 using Application.Interfaces;
+using Application.Services;
 using Domain.Audit;
 using Domain.Dto;
 using Domain.Request;
@@ -53,6 +54,10 @@ namespace authcraft_api.Controllers
             {
                 var identity = await _localAuthService.SignupAsync(request);
                 return Ok(new { message = "Registro exitoso", email = identity.Email });
+            }
+            catch (SignupValidationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
             }
             catch (InvalidOperationException ex)
             {

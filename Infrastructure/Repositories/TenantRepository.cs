@@ -12,6 +12,7 @@ namespace Infrastructure.Repositories
         Task UpdateAsync(Tenant tenant, CancellationToken cancellationToken = default);
         Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default);
         Task<string> GetDomainByClient(string clientId, CancellationToken cancellationToken = default);
+        Task<Tenant?> GetByClientIdAsync(string clientId, CancellationToken cancellationToken = default);
     }
 
     public class TenantRepository : ITenantRepository
@@ -61,6 +62,13 @@ namespace Infrastructure.Repositories
             _dbContext.Tenants.Remove(tenant);
             await _dbContext.SaveChangesAsync(cancellationToken);
             return true;
+        }
+
+        public async Task<Tenant?> GetByClientIdAsync(string clientId, CancellationToken cancellationToken = default)
+        {
+            return await _dbContext.Tenants
+                .AsNoTracking()
+                .FirstOrDefaultAsync(tenant => tenant.ClientId == clientId, cancellationToken);
         }
 
         public async Task<string> GetDomainByClient(string clientId, CancellationToken cancellationToken = default) => await _dbContext.Tenants

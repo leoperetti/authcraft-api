@@ -3,6 +3,7 @@ using Infrastructure;
 using Application;
 using authcraft_api.Bootstrap;
 using authcraft_api.Cors;
+using authcraft_api.Configuration;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -16,41 +17,41 @@ public partial class Program
     private static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        EnvironmentConfiguration.ValidateRuntimeEnvironment(
+            builder.Environment.EnvironmentName,
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+            Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"));
 
-        // Si estamos en producción, cargar secretos desde Azure Key Vault
-        if (builder.Environment.IsProduction() || builder.Environment.IsStaging())
+        var keyVaultName = EnvironmentConfiguration.ValidateVault(
+            builder.Configuration,
+            builder.Environment.EnvironmentName);
+        if (keyVaultName is not null)
         {
-            var keyVaultName = builder.Configuration["KeyVault:Name"];
-            if (!string.IsNullOrWhiteSpace(keyVaultName))
-            {
-                var kvUri = new Uri($"https://{keyVaultName}.vault.azure.net/");
-                builder.Configuration.AddAzureKeyVault(kvUri, new DefaultAzureCredential());
-            }
+            var keyVaultUri = new Uri($"https://{keyVaultName}.vault.azure.net/");
+            builder.Configuration.AddAzureKeyVault(keyVaultUri, new DefaultAzureCredential());
         }
 
-        // Leer posibles secretos desde Key Vault (si existen) y pasarlos a la capa de infraestructura
-        var connectionStringFromKeyVault = builder.Configuration["DatabaseConnectionString"];
-
-        var jwtKeyFromKv = builder.Configuration["JwtKey"] ?? builder.Configuration["Jwt:Key"];
-        if (!string.IsNullOrWhiteSpace(jwtKeyFromKv) && string.IsNullOrWhiteSpace(builder.Configuration["Jwt:Key"]))
+        var environmentSettings = EnvironmentConfiguration.Resolve(
+            builder.Configuration,
+            builder.Environment.EnvironmentName);
+        var effectiveConfiguration = new Dictionary<string, string?>
         {
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string>
-            {
-                { "Jwt:Key", jwtKeyFromKv }
-            });
-        }
+            ["Jwt:Key"] = environmentSettings.JwtKey,
+            ["Jwt:Issuer"] = environmentSettings.JwtIssuer,
+            ["Jwt:Audience"] = environmentSettings.JwtAudience,
+            ["Authentication:Google:ClientId"] = environmentSettings.GoogleClientId,
+            ["Authentication:Google:ClientSecret"] = environmentSettings.GoogleClientSecret
+        };
+        builder.Configuration.AddInMemoryCollection(effectiveConfiguration);
 
-        builder.Services.AddInfrastructure(builder.Configuration, connectionStringFromKeyVault);
+        builder.Services.AddInfrastructure(
+            builder.Configuration,
+            environmentName: builder.Environment.EnvironmentName);
         builder.Services.AddApplicationDependencies();
         builder.Services.Configure<SuperadminBootstrapOptions>(builder.Configuration.GetSection("SuperadminBootstrap"));
         builder.Services.AddScoped<SuperadminBootstrapper>();
 
         builder.Services.AddControllers();
-
-        var googleClientId = builder.Configuration["ClientId"] ?? builder.Configuration["Authentication:Google:ClientId"];
-        var googleClientSecret = builder.Configuration["ClientSecret"] ?? builder.Configuration["ClientSecretId"] ?? builder.Configuration["Authentication:Google:ClientSecret"];
-
-        var googleConfigured = !string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret);
 
         // Configurar esquema de autenticación; solo usar Google como challenge si está configurado
         var authBuilder = builder.Services.AddAuthentication(options =>
@@ -58,7 +59,7 @@ public partial class Program
             // Authenticate API requests with JWTs by default; use cookies for sign-in flows
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
             options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            if (googleConfigured)
+            if (environmentSettings.GoogleEnabled)
             {
                 options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
             }
@@ -69,32 +70,17 @@ public partial class Program
         // Add JWT bearer authentication so the API can validate incoming JWTs
         authBuilder.AddJwtBearer(options =>
         {
-            var jwtKey = jwtKeyFromKv ?? string.Empty;
-            var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? string.Empty;
-            var jwtAudience = builder.Configuration["Jwt:Audience"] ?? string.Empty;
-
             options.RequireHttpsMetadata = true;
             options.SaveToken = true;
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-                ValidateIssuer = !string.IsNullOrEmpty(jwtIssuer),
-                ValidIssuer = string.IsNullOrEmpty(jwtIssuer) ? null : jwtIssuer,
-                ValidateLifetime = true,
-                ValidateAudience = !string.IsNullOrEmpty(jwtAudience),
-                ValidAudience = string.IsNullOrEmpty(jwtAudience) ? null : jwtAudience,
-                NameClaimType = ClaimTypes.Name,
-                RoleClaimType = ClaimTypes.Role
-            };
+            options.TokenValidationParameters = environmentSettings.CreateTokenValidationParameters();
         });
 
-        if (googleConfigured)
+        if (environmentSettings.GoogleEnabled)
         {
             authBuilder.AddGoogle(googleOptions =>
             {
-                googleOptions.ClientId = googleClientId;
-                googleOptions.ClientSecret = googleClientSecret;
+                googleOptions.ClientId = environmentSettings.GoogleClientId!;
+                googleOptions.ClientSecret = environmentSettings.GoogleClientSecret!;
                 googleOptions.CallbackPath = "/api/authentication/google/callback";
             });
         }

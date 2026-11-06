@@ -3,20 +3,26 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Infrastructure.Data;
 using Infrastructure.Repositories;
+using Infrastructure.Configuration;
+using Infrastructure.Health;
 
 namespace Infrastructure
 {
     public static class DependencyInjection
     {
-        public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, string? connectionStringOverride = null)
+        public static IServiceCollection AddInfrastructure(
+            this IServiceCollection services,
+            IConfiguration configuration,
+            string? connectionStringOverride = null,
+            string environmentName = "Development")
         {
-            if (string.IsNullOrWhiteSpace(connectionStringOverride))
-            {
-                throw new InvalidOperationException("Database connection string is not configured. Set ConnectionStrings:DefaultConnection or ConnectionStrings:AZURE_SQL_CONNECTIONSTRING or provide an override.");
-            }
+            var resolvedConnectionString = DatabaseConfiguration.ResolveAndValidate(
+                configuration,
+                connectionStringOverride,
+                environmentName);
 
             services.AddDbContext<AppDbContext>(options =>
-                options.UseSqlServer(connectionStringOverride));
+                options.UseSqlServer(resolvedConnectionString));
 
             // Repositories
             services.AddScoped<IIdentityRepository, IdentityRepository>();
@@ -28,6 +34,7 @@ namespace Infrastructure
             services.AddScoped<ITenantRepository, TenantRepository>();
             services.AddScoped<IUnitOfWork, UnitOfWork>();
             services.AddScoped<IPasswordResetTokenRepository, PasswordResetTokenRepository>();
+            services.AddScoped<DatabaseReadinessCheck.IChecker, DatabaseReadinessCheck>();
             // Email service: registered in Application layer implementation (if desired)
 
             return services;

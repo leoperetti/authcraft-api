@@ -1,0 +1,96 @@
+name: Validate AuthCraft staging packages (no deployment)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authcraft-staging-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build API
+        run: dotnet build authcraft-api/authcraft-api.csproj --configuration Release
+
+      - name: Run focused environment and pipeline tests
+        run: dotnet test authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~Environment|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~StagingReleaseSmokeTests|FullyQualifiedName~DeploymentRecoveryTests"
+
+      - name: Build SQL project and DACPAC
+        run: msbuild authcraft-db/authcraft-db.sqlproj /p:Configuration=Release
+
+      - name: Package release artifacts
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDirectory = Join-Path $env:RUNNER_TEMP 'authcraft-release'
+          $publishDirectory = Join-Path $releaseDirectory 'api-publish'
+          New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+
+          dotnet publish authcraft-api/authcraft-api.csproj --configuration Release --no-build --output $publishDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'API publish failed.' }
+
+          $apiArtifactPath = Join-Path $releaseDirectory 'api.zip'
+          Compress-Archive -Path (Join-Path $publishDirectory '*') -DestinationPath $apiArtifactPath
+          if (-not (Test-Path -LiteralPath $apiArtifactPath -PathType Leaf)) { throw 'API package creation failed.' }
+
+          $dacpacPath = (Resolve-Path 'authcraft-db/bin/Release/authcraft-db.dacpac').Path
+          $manifestPath = Join-Path $releaseDirectory 'release-manifest.json'
+          ./scripts/New-ReleaseManifest.ps1 `
+            -ApiArtifactPath $apiArtifactPath `
+            -DatabaseArtifactPath $dacpacPath `
+            -CommitSha $env:GITHUB_SHA `
+            -RunId $env:GITHUB_RUN_ID `
+            -OutputPath $manifestPath
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Release manifest creation failed.' }
+
+          "Release packages created for commit $env:GITHUB_SHA. This workflow does not deploy to Azure." |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload API package
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api
+          path: ${{ runner.temp }}/authcraft-release/api.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload database package
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dacpac
+          path: authcraft-db/bin/Release/authcraft-db.dacpac
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release manifest
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/authcraft-release/release-manifest.json
+          if-no-files-found: error
+          retention-days: 30

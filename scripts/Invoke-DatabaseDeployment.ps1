@@ -1,0 +1,190 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('Evaluate', 'Publish')]
+    [string]$Mode,
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('staging', 'production')]
+    [string]$TargetEnvironment,
+    [Parameter(Mandatory = $true)]
+    [string]$DacpacPath,
+    [Parameter(Mandatory = $true)]
+    [string]$ManifestPath,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedCommitSha,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedRunId,
+    [string]$SqlPackagePath,
+    [string]$ReviewIssueNumber,
+    [string]$AllowedReviewer = 'leoperetti'
+)
+
+$ErrorActionPreference = 'Stop'
+$originalSqlAccessToken = [Environment]::GetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN')
+$originalGitHubToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
+if ($Mode -eq 'Publish' -and $TargetEnvironment -ne 'staging') {
+    throw 'Production database publication is blocked until protected approval is available.'
+}
+if (-not (Test-Path -LiteralPath $DacpacPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    throw 'DACPAC and release manifest files are required.'
+}
+
+$manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+$dacpacHash = (Get-FileHash -LiteralPath $DacpacPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($manifest.commit_sha -cne $ExpectedCommitSha.ToLowerInvariant() -or
+    [string]$manifest.run_id -cne $ExpectedRunId -or
+    $manifest.database.artifact -ne 'dacpac' -or
+    -not [string]::Equals($manifest.database.sha256, $dacpacHash, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'DACPAC does not match the candidate release manifest.'
+}
+
+if ($TargetEnvironment -eq 'staging') {
+    $targetServer = 'authcraftdbbrasil.database.windows.net'
+    $targetDatabase = 'authcraft-db-staging'
+} else {
+    $targetServer = 'authcraftdbbrasil.database.windows.net'
+    $targetDatabase = 'authcraft-db'
+}
+
+$sqlAccessToken = [Environment]::GetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN')
+if ([string]::IsNullOrWhiteSpace($sqlAccessToken)) {
+    throw 'A short-lived SQL access token is required in AUTHCRAFT_SQL_ACCESS_TOKEN.'
+}
+
+if (-not $SqlPackagePath) {
+    $SqlPackagePath = 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Extensions\Microsoft\SQLDB\DAC\SqlPackage.exe'
+}
+if (-not (Test-Path -LiteralPath $SqlPackagePath -PathType Leaf)) {
+    throw 'SqlPackage.exe was not found.'
+}
+
+$artifactDirectory = Split-Path -Parent (Resolve-Path -LiteralPath $DacpacPath).Path
+$reportPath = Join-Path $artifactDirectory "$TargetEnvironment-deploy-report.xml"
+$scriptPath = Join-Path $artifactDirectory "$TargetEnvironment-deploy.sql"
+$commonArguments = @(
+    "/SourceFile:$((Resolve-Path -LiteralPath $DacpacPath).Path)",
+    "/TargetServerName:tcp:$targetServer,1433",
+    "/TargetDatabaseName:$targetDatabase",
+    '/TargetTrustServerCertificate:True',
+    '/p:BlockOnPossibleDataLoss=True',
+    '/p:DropObjectsNotInSource=False',
+    "/AccessToken:$sqlAccessToken"
+)
+
+function Invoke-SqlPackage {
+    param(
+        [string]$Path,
+        [string[]]$Arguments
+    )
+
+    if ([IO.Path]::GetExtension($Path) -ieq '.ps1') {
+        & powershell.exe -NoProfile -NonInteractive -File $Path @Arguments
+    }
+    else {
+        & $Path @Arguments
+    }
+
+    return $LASTEXITCODE
+}
+
+try {
+    $reportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$reportPath"))
+    if ($reportExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+        throw 'SqlPackage DeployReport failed. No database changes were made.'
+    }
+
+    $scriptExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Script') + $commonArguments + @("/DeployScriptPath:$scriptPath"))
+    if ($scriptExitCode -ne 0 -or -not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw 'SqlPackage Script failed. No database changes were made.'
+    }
+
+    $reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $scriptHash = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Mode -eq 'Evaluate') {
+        [pscustomobject]@{
+            state = 'evaluated'
+            target_environment = $TargetEnvironment
+            database_server = $targetServer
+            database_name = $targetDatabase
+            commit_sha = $ExpectedCommitSha.ToLowerInvariant()
+            run_id = $ExpectedRunId
+            dacpac_sha256 = $dacpacHash
+            deploy_report_sha256 = $reportHash
+            deploy_script_sha256 = $scriptHash
+            deploy_report_path = $reportPath
+            deploy_script_path = $scriptPath
+        } | ConvertTo-Json -Compress
+        return
+    }
+
+    if ($ReviewIssueNumber -notmatch '^[1-9][0-9]*$') {
+        throw 'Publish requires a GitHub issue with an authenticated deployment review.'
+    }
+    $githubToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
+    $repository = [Environment]::GetEnvironmentVariable('GITHUB_REPOSITORY')
+    if ([string]::IsNullOrWhiteSpace($githubToken) -or $repository -cne 'leoperetti/authcraft-api') {
+        throw 'Authenticated GitHub review access is unavailable.'
+    }
+
+    Import-Module (Join-Path $PSScriptRoot 'DeploymentReview.psm1') -Force
+    $headers = @{
+        Authorization = "Bearer $githubToken"
+        Accept = 'application/vnd.github+json'
+        'X-GitHub-Api-Version' = '2022-11-28'
+    }
+    $issueUri = "https://api.github.com/repos/$repository/issues/$ReviewIssueNumber"
+    $issue = Invoke-RestMethod -Uri $issueUri -Headers $headers -Method Get
+    if ($issue.state -ne 'open' -or $issue.pull_request) {
+        throw 'Deployment review must be recorded on an open GitHub issue.'
+    }
+    $comments = @(Invoke-RestMethod -Uri "$issueUri/comments?per_page=100" -Headers $headers -Method Get)
+    if ($comments.Count -ge 100) {
+        throw 'Review issue exceeds the verifiable comment limit; use a new review issue.'
+    }
+
+    $reviewComments = @($comments | Where-Object {
+        $_.user.login -ceq $AllowedReviewer -and $_.body -match '(?im)^\s*deployment_review\s*='
+    } | Sort-Object created_at)
+    if ($reviewComments.Count -eq 0) {
+        throw 'No authenticated deployment review was found.'
+    }
+    $review = $reviewComments[-1]
+    if (-not (Test-DeploymentReviewRecord `
+                -Body $review.body `
+                -Author $review.user.login `
+                -AllowedReviewer $AllowedReviewer `
+                -RunId $ExpectedRunId `
+                -CommitSha $ExpectedCommitSha `
+                -TargetEnvironment $TargetEnvironment `
+                -DatabaseServer $targetServer `
+                -DatabaseName $targetDatabase `
+                -DacpacSha256 $dacpacHash `
+                -ReportSha256 $reportHash `
+                -ScriptSha256 $scriptHash)) {
+        throw 'Latest authenticated review does not approve this exact release, destination, and SQL plan.'
+    }
+
+    $publishExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Publish') + $commonArguments)
+    if ($publishExitCode -ne 0) {
+        throw 'SqlPackage Publish failed. Inspect the target; no rollback was attempted.'
+    }
+
+    [pscustomobject]@{
+        state = 'published'
+        target_environment = $TargetEnvironment
+        database_name = $targetDatabase
+        commit_sha = $ExpectedCommitSha.ToLowerInvariant()
+        run_id = $ExpectedRunId
+        dacpac_sha256 = $dacpacHash
+        review_comment_id = $review.id
+    } | ConvertTo-Json -Compress
+}
+finally {
+    $sqlAccessToken = $null
+    $githubToken = $null
+    [Environment]::SetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN', $originalSqlAccessToken)
+    [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $originalGitHubToken)
+    $originalSqlAccessToken = $null
+    $originalGitHubToken = $null
+}

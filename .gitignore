@@ -15,6 +15,9 @@ packages/
 # dotnet
 project.lock.json
 artifacts/
+.env*
+!.env.example
+!.env.sample
 
 # Ignore DB project model files
 *.dbmdl

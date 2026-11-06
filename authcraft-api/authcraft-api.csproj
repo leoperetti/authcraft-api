@@ -6,7 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>authcraft_api</RootNamespace>
     <UserSecretsId>11692428-d5ab-458d-af66-82aa2794c394</UserSecretsId>
+    <CommitSha Condition="'$(CommitSha)' == ''">local</CommitSha>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="CommitSha" Value="$(CommitSha)" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.5.2" />

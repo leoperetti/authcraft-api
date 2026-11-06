@@ -11,6 +11,8 @@ namespace authcraft_api.Bootstrap;
 
 public sealed class SuperadminBootstrapper
 {
+    private const string GymTenantSlug = "cekide-gym-web";
+
     private readonly AppDbContext _appDbContext;
     private readonly SuperadminBootstrapOptions _options;
     private readonly ILogger<SuperadminBootstrapper> _logger;
@@ -43,6 +45,7 @@ public sealed class SuperadminBootstrapper
         var identity = await EnsureIdentityAsync(cancellationToken);
         await EnsureLocalAccountAsync(identity.Id, cancellationToken);
         await EnsureMembershipAsync(identity.Id, tenant.Id, superadminRole.Id, cancellationToken);
+        await EnsureGymTeacherRoleAsync(cancellationToken);
 
         await _appDbContext.SaveChangesAsync(cancellationToken);
 
@@ -72,6 +75,21 @@ public sealed class SuperadminBootstrapper
         await _appDbContext.SaveChangesAsync(cancellationToken);
 
         return tenant;
+    }
+
+    private async Task EnsureGymTeacherRoleAsync(CancellationToken cancellationToken)
+    {
+        var gymTenantId = await _appDbContext.Tenants
+            .Where(currentTenant => currentTenant.Slug == GymTenantSlug)
+            .Select(currentTenant => (long?)currentTenant.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (!gymTenantId.HasValue)
+        {
+            return;
+        }
+
+        await EnsureRoleAsync(gymTenantId.Value, "teacher", cancellationToken);
     }
 
     private async Task<Role> EnsureRolesAsync(long tenantId, CancellationToken cancellationToken)

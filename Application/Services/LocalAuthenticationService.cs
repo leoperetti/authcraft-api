@@ -36,7 +36,9 @@ namespace Application.Services
             if (existingIdentity != null)
                 throw new InvalidOperationException("El email con el que intenta registrarse ya existe");
 
-            var clientId = await ResolveClientIdAsync(request);
+            var invitation = await ResolveInvitationAsync(request);
+            var clientId = await ResolveClientIdAsync(request, invitation);
+            var normalizedDni = ValidateInvitationDni(request, invitation);
             var now = DateTimeOffset.UtcNow;
             string? normalizedPhone = null;
             if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
@@ -85,36 +87,54 @@ namespace Application.Services
 
             await _localAccounts.AddAsync(localAccount);
 
-            var roleToAssign = await ResolveSignupRoleAsync(request, clientId);
+            var roleToAssign = invitation?.Purpose == "gym_student"
+                ? "user"
+                : await ResolveSignupRoleAsync(request, clientId);
             await _roleService.AssignRoleAsync(identity, clientId, roleToAssign);
 
-            if (!string.IsNullOrWhiteSpace(request.InvitationCode))
+            if (invitation is not null)
             {
-                var normalizedInvitationCode = request.InvitationCode.Trim();
-                var nowForInvitation = DateTimeOffset.UtcNow;
-                var invitation = await _dbContext.Invitations
-                    .FirstOrDefaultAsync(currentInvitation =>
-                        currentInvitation.Code == normalizedInvitationCode
-                        && currentInvitation.Email == request.Email
-                        && !currentInvitation.Used
-                        && (!currentInvitation.ExpiresAt.HasValue || currentInvitation.ExpiresAt > nowForInvitation));
-
-                if (invitation == null)
-                    throw new InvalidOperationException("La invitación no es válida para el email indicado");
-
                 invitation.Used = true;
-
+                invitation.AcceptedIdentity = identity;
+                invitation.AcceptedAt = now;
                 var joinedMembership = identity.Memberships
                     .FirstOrDefault(currentMembership => currentMembership.TenantId == invitation.TenantId);
 
                 if (joinedMembership != null)
                 {
-                    joinedMembership.JoinedAt ??= nowForInvitation;
-                    joinedMembership.UpdatedAt = nowForInvitation;
+                    joinedMembership.JoinedAt ??= now;
+                    joinedMembership.UpdatedAt = now;
+                }
+
+                if (invitation.Purpose == "gym_student")
+                {
+                    invitation.RegisteredFirstName = request.FirstName.Trim();
+                    invitation.RegisteredLastName = request.LastName.Trim();
+                    invitation.RegisteredPhoneNumber = normalizedPhone;
+                    invitation.RegisteredDni = normalizedDni;
                 }
             }
 
-            await _unitOfWork.SaveChangesAsync();
+            await using var transaction = _dbContext.Database.IsRelational()
+                ? await _dbContext.Database.BeginTransactionAsync()
+                : null;
+            try
+            {
+                await _unitOfWork.SaveChangesAsync();
+                if (transaction is not null)
+                {
+                    await transaction.CommitAsync();
+                }
+            }
+            catch (DbUpdateConcurrencyException) when (invitation is not null)
+            {
+                if (transaction is not null)
+                {
+                    await transaction.RollbackAsync();
+                }
+
+                throw new InvalidOperationException("La invitación ya fue utilizada.");
+            }
 
             return identity;
         }
@@ -152,26 +172,43 @@ namespace Application.Services
             return tenantAlreadyHasOwner ? "user" : "owner";
         }
 
-        private async Task<string> ResolveClientIdAsync(SignupRequest request)
+        private async Task<Invitation?> ResolveInvitationAsync(SignupRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.InvitationCode))
+            {
+                return null;
+            }
+
+            var normalizedInvitationCode = request.InvitationCode.Trim();
+            var now = DateTimeOffset.UtcNow;
+            var invitation = await _dbContext.Invitations
+                .SingleOrDefaultAsync(currentInvitation =>
+                    currentInvitation.Code == normalizedInvitationCode
+                    && !currentInvitation.Used
+                    && (!currentInvitation.ExpiresAt.HasValue || currentInvitation.ExpiresAt > now));
+
+            if (invitation is null
+                || !string.Equals(invitation.Email, request.Email, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("La invitación no es válida para el email indicado");
+            }
+
+            return invitation;
+        }
+
+        private async Task<string> ResolveClientIdAsync(SignupRequest request, Invitation? invitation)
         {
             var normalizedRequestClientId = request.ClientId?.Trim();
 
             if (!string.IsNullOrWhiteSpace(request.InvitationCode))
             {
-                var normalizedInvitationCode = request.InvitationCode.Trim();
-                var now = DateTimeOffset.UtcNow;
-                var invitationClientId = await _dbContext.Invitations
-                    .Where(currentInvitation =>
-                        currentInvitation.Code == normalizedInvitationCode
-                        && currentInvitation.Email == request.Email
-                        && !currentInvitation.Used
-                        && (!currentInvitation.ExpiresAt.HasValue || currentInvitation.ExpiresAt > now))
-                    .Select(currentInvitation => currentInvitation.Tenant.ClientId)
-                    .SingleOrDefaultAsync();
-
-                if (string.IsNullOrWhiteSpace(invitationClientId))
+                if (invitation is null)
                     throw new InvalidOperationException("La invitación no es válida para el email indicado");
 
+                var invitationClientId = await _dbContext.Tenants
+                    .Where(tenant => tenant.Id == invitation.TenantId)
+                    .Select(tenant => tenant.ClientId)
+                    .SingleAsync();
                 if (!string.IsNullOrWhiteSpace(normalizedRequestClientId)
                     && !string.Equals(invitationClientId, normalizedRequestClientId, StringComparison.OrdinalIgnoreCase))
                 {
@@ -191,6 +228,39 @@ namespace Application.Services
                 throw new InvalidOperationException($"No existe un tenant para el clientId '{normalizedRequestClientId}'");
 
             return normalizedRequestClientId;
+        }
+
+        private static string? ValidateInvitationDni(SignupRequest request, Invitation? invitation)
+        {
+            if (invitation?.Purpose != "gym_student")
+            {
+                return null;
+            }
+
+            var normalizedDni = NormalizeDni(request.Dni);
+            if (invitation.Dni is not null
+                && !string.Equals(normalizedDni, NormalizeDni(invitation.Dni), StringComparison.Ordinal))
+            {
+                throw new SignupValidationException("El DNI no coincide con los datos de la invitación.");
+            }
+
+            return normalizedDni;
+        }
+
+        private static string NormalizeDni(string? dni)
+        {
+            if (string.IsNullOrWhiteSpace(dni))
+            {
+                throw new SignupValidationException("El DNI es obligatorio para esta invitación.");
+            }
+
+            var normalized = dni.Replace(".", string.Empty).Replace(" ", string.Empty);
+            if (!System.Text.RegularExpressions.Regex.IsMatch(normalized, "^[0-9]{7,8}$"))
+            {
+                throw new SignupValidationException("El DNI debe contener siete u ocho dígitos.");
+            }
+
+            return normalized;
         }
 
         private static string? NormalizeE164(string phone)
