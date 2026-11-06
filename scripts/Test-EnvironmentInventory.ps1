@@ -42,7 +42,7 @@ if ($SnapshotPath) {
     $apps = @(Invoke-MetadataJson az @('webapp', 'list', '--resource-group', $inventory.resource_group, '--output', 'json'))
     $identities = @(Invoke-MetadataJson az @('identity', 'list', '--resource-group', $inventory.resource_group, '--output', 'json'))
     $vaults = @(Invoke-MetadataJson az @('keyvault', 'list', '--resource-group', $inventory.resource_group, '--output', 'json'))
-    $roles = @(Invoke-MetadataJson az @('role', 'assignment', 'list', '--all', '--output', 'json'))
+    $roles = @(Invoke-MetadataJson az @('role', 'assignment', 'list', '--all', '--include-inherited', '--output', 'json'))
     $workflows = Invoke-MetadataJson gh @('api', "repos/$($inventory.repository)/actions/workflows")
     $observed = [ordered]@{}
     foreach ($expected in $inventory.environments | Where-Object { $_.name -ne 'development' }) {
@@ -79,7 +79,15 @@ if ($SnapshotPath) {
             dotnet_environment = $dotnetSetting.value
             runtime_principal = $runtimePrincipal
             runtime_vaults = $runtimeVaults
+            runtime_arm_roles = @($roles | Where-Object { $_.principalId -eq $runtimePrincipal } |
+                ForEach-Object { @{ role = $_.roleDefinitionName; scope = $_.scope } })
             publisher_scopes = $publisherScopes
+            attached_user_identities = @(
+                if ($app.identity.userAssignedIdentities) {
+                    $app.identity.userAssignedIdentities.PSObject.Properties.Name |
+                        ForEach-Object { ($_ -split '/')[-1] }
+                }
+            )
             host = $app.defaultHostName
             shared_plan = $app.serverFarmId
         }
@@ -90,13 +98,37 @@ if ($SnapshotPath) {
             '--identity-name', $identity.name, '--resource-group', $inventory.resource_group, '--output', 'json'))
         $identityAudit += @{
             name = $identity.name
-            federated_subjects = @($federations.subject)
+            federated_subjects = @($federations | ForEach-Object { $_.subject })
+            arm_roles = @($roles | Where-Object { $_.principalId -eq $identity.principalId } |
+                ForEach-Object { @{ role = $_.roleDefinitionName; scope = $_.scope } })
+        }
+    }
+    $production = $inventory.environments | Where-Object { $_.name -eq 'production' }
+    $productionApp = $apps | Where-Object { $_.name -eq $production.application } | Select-Object -First 1
+    $publicationControls = $null
+    if ($productionApp) {
+        $scmPolicy = Invoke-MetadataJson az @('rest', '--method', 'get', '--url',
+            "https://management.azure.com$($productionApp.id)/basicPublishingCredentialsPolicies/scm?api-version=2024-11-01",
+            '--query', '{allow:properties.allow}', '--output', 'json')
+        $ftpPolicy = Invoke-MetadataJson az @('rest', '--method', 'get', '--url',
+            "https://management.azure.com$($productionApp.id)/basicPublishingCredentialsPolicies/ftp?api-version=2024-11-01",
+            '--query', '{allow:properties.allow}', '--output', 'json')
+        $repositorySecrets = Invoke-MetadataJson gh @('api', "repos/$($inventory.repository)/actions/secrets?per_page=100")
+        if ($repositorySecrets.total_count -ne @($repositorySecrets.secrets).Count) {
+            throw 'Repository secret name metadata is truncated; publication controls cannot be verified.'
+        }
+        $publicationControls = @{
+            scm_basic_auth_enabled = $scmPolicy.allow
+            ftp_basic_auth_enabled = $ftpPolicy.allow
+            legacy_sql_secret_present = [bool]@($repositorySecrets.secrets |
+                Where-Object { $_.name -ceq 'AZURE_SQL_CONNECTION_STRING' }).Count
         }
     }
     $metadata = [pscustomobject]@{
         environments = [pscustomobject]$observed
         identities = $identityAudit
         metadata_errors = @()
+        production_publication_controls = $publicationControls
         production_workflow_active = [bool]($workflows.workflows | Where-Object {
             $_.path -eq $inventory.production_workflow_path -and $_.state -eq 'active'
         })
@@ -168,10 +200,53 @@ foreach ($expected in $inventory.environments) {
 if ($metadata.production_workflow_active) {
     $blockingReasons.Add('production: existing workflow is active; its publication controls require review before activation.')
 }
+$production = $inventory.environments | Where-Object { $_.name -eq 'production' }
+if ($metadata.environments.production.attached_user_identities -isnot [array]) {
+    $blockingReasons.Add('production: attached identity metadata is unverified.')
+}
+if ($metadata.environments.production.runtime_arm_roles -isnot [array]) {
+    $blockingReasons.Add('production: runtime ARM grants are unverified.')
+} else {
+    foreach ($role in $metadata.environments.production.runtime_arm_roles) {
+        if ($role.role -cnotin @('Reader', 'Key Vault Reader', 'Key Vault Secrets User') -or
+            [string]::IsNullOrWhiteSpace($role.scope)) {
+            $blockingReasons.Add('production: runtime ARM grants require review before publication protection can be confirmed.')
+        }
+    }
+}
+$productionIdentities = @(@($production.publisher) +
+    @($metadata.environments.production.attached_user_identities) | Sort-Object -Unique)
+foreach ($identityName in $productionIdentities) {
+    $matches = @($metadata.identities | Where-Object { $_.name -ceq $identityName })
+    if ($matches.Count -ne 1 -or $matches[0].arm_roles -isnot [array] -or
+        $matches[0].federated_subjects -isnot [array]) {
+        $blockingReasons.Add("production: identity $identityName publication audit is missing or ambiguous.")
+        continue
+    }
+    if (@($matches[0].arm_roles).Count -gt 0) {
+        $blockingReasons.Add("production: identity $identityName retains ARM grants that require review before publication protection can be confirmed.")
+    }
+    if (@($matches[0].federated_subjects).Count -gt 0) {
+        $blockingReasons.Add("production: identity $identityName retains federated trust while protected publication is unavailable.")
+    }
+}
+foreach ($control in @('scm_basic_auth_enabled', 'ftp_basic_auth_enabled', 'legacy_sql_secret_present')) {
+    $value = $metadata.production_publication_controls.$control
+    if ($value -isnot [bool] -or $value -ne $false) {
+        $blockingReasons.Add("production: $control is enabled or unverified.")
+    }
+}
+$productionReasons = @($blockingReasons | Where-Object { $_.StartsWith('production:', [StringComparison]::Ordinal) })
+if ($productionReasons.Count -gt 0) {
+    $productionResult = $results | Where-Object { $_.name -eq 'production' } | Select-Object -First 1
+    $productionResult.verification_state = 'blocked'
+    $productionResult.blocking_reasons = $productionReasons
+}
 $audit = @($metadata.identities | ForEach-Object {
     @{
         name = $_.name
         federated_subjects = @($_.federated_subjects)
+        arm_roles = @($_.arm_roles)
         verification_state = 'pending'
         blocking_reason = 'Federation metadata does not identify actual workflow consumers.'
     }
@@ -184,6 +259,7 @@ if ($blockingReasons.Count -gt 0) { $overall = 'blocked' }
     verification_state = $overall
     environments = $results
     identity_audit = $audit
+    production_publication_controls = $metadata.production_publication_controls
     blocking_reasons = @($blockingReasons.ToArray())
 } | ConvertTo-Json -Depth 12
 if ($blockingReasons.Count -gt 0) { exit 1 }

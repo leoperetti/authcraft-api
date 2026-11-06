@@ -89,6 +89,8 @@ public sealed class LocalEnvironmentSqlTests
                 "SELECT COUNT(*) AS [Value] FROM sys.tables WHERE is_ms_shipped = 0")
                 .SingleAsync();
             Assert.Equal(13, tableCount);
+
+            await VerifySchemaReviewPermissionsAsync(targetConnectionString);
         }
         finally
         {
@@ -99,6 +101,37 @@ public sealed class LocalEnvironmentSqlTests
 
             Directory.Delete(evidenceDirectory, recursive: true);
         }
+    }
+
+    private static async Task VerifySchemaReviewPermissionsAsync(string connectionString)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = 30;
+        command.CommandText = """
+            CREATE USER [authcraft_schema_review_test] WITHOUT LOGIN;
+            GRANT CONNECT TO [authcraft_schema_review_test];
+            GRANT VIEW DEFINITION TO [authcraft_schema_review_test];
+            EXECUTE AS USER = N'authcraft_schema_review_test';
+            """ + "\n" + StagingPublisherSqlTests.ReviewPermissionQuery + "\nREVERT;";
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            StagingPublisherSqlTests.AssertReviewPermissions(reader);
+            Assert.Equal(13, reader.GetInt32(reader.GetOrdinal("visible_table_count")));
+        }
+
+        command.CommandText = """
+            GRANT INSERT ON OBJECT::dbo.providers TO [authcraft_schema_review_test];
+            EXECUTE AS USER = N'authcraft_schema_review_test';
+            """ + "\n" + StagingPublisherSqlTests.ReviewPermissionQuery + "\nREVERT;";
+        await using var elevatedPermissions = await command.ExecuteReaderAsync();
+        Assert.True(await elevatedPermissions.ReadAsync());
+        Assert.Equal(1, elevatedPermissions.GetInt32(elevatedPermissions.GetOrdinal("can_run_postdeploy")));
+        Assert.Equal(1, elevatedPermissions.GetInt32(elevatedPermissions.GetOrdinal("unapproved_grant_count")));
+        Assert.Equal(1, elevatedPermissions.GetInt32(elevatedPermissions.GetOrdinal("writable_table_count")));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StagingPublisherSqlTests.AssertReviewPermissions(elevatedPermissions));
     }
 
     private static string GetLocalDevelopmentConnectionString()

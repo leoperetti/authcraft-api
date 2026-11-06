@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      verify_staging_publisher:
+        description: Verify staging OIDC/SQL review permissions only (no deployment)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -34,7 +40,7 @@ jobs:
         run: dotnet build authcraft-api/authcraft-api.csproj --configuration Release
 
       - name: Run focused environment and pipeline tests
-        run: dotnet test authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~Environment|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~StagingReleaseSmokeTests|FullyQualifiedName~DeploymentRecoveryTests"
+        run: dotnet test authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~Environment|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~StagingReleaseSmokeTests|FullyQualifiedName~DeploymentRecoveryTests|FullyQualifiedName~DatabaseDeploymentReviewTests|FullyQualifiedName~ProductionApprovalTests|FullyQualifiedName~StagingPublisherVerificationTests"
 
       - name: Build SQL project and DACPAC
         run: msbuild authcraft-db/authcraft-db.sqlproj /p:Configuration=Release
@@ -94,3 +100,37 @@ jobs:
           path: ${{ runner.temp }}/authcraft-release/release-manifest.json
           if-no-files-found: error
           retention-days: 30
+
+  verify-staging-publisher:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_staging_publisher == true
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Build SQL verification tests
+        run: dotnet build authcraft-api.Tests/authcraft-api.Tests.csproj --configuration Release
+
+      - name: Login as staging publisher via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Verify staging SQL login and review-only permissions
+        shell: pwsh
+        run: |
+          & .\scripts\Test-StagingPublisher.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Staging publisher verification failed.' }
+          'Staging SQL review identity verified. No deployment authorized or attempted.' |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY

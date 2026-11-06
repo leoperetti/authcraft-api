@@ -63,6 +63,14 @@ No agregar tablas para el modelo operativo de publicaciones.
 - [X] T009 [US1] Auditar consumidores, adjuntos y federaciones de `oidc-msi-a9fa`, `oidc-msi-aede`, `authcraft-api-st-id-97cc` y la identidad por sistema production; registrar propósito confirmado o desconocido y scopes en `docs\environments.md`, contrastando configuración de workflows sin imprimir secretos; no borrar ni desacoplar identidades por inferencia.
 - [ ] T010 [US1] Con autorización explícita para conexiones que reactiven bases, comprobar destinos efectivos y permisos SQL de runtime/publicadores mediante sesiones protegidas de solo lectura; registrar en `docs\environments.md` usuarios, privilegios relevantes y ausencia de modificación production por identidades local/staging. Cadenas distintas y RBAC ARM no bastan; si falta autorización/permisos, registrar bloqueo sin confirmar aislamiento.
 - [ ] T011 [US1] Preparar y aplicar únicamente correcciones de permisos SQL identificadas en T010 que reciban autorización explícita, con scripts revisados guardados de forma protegida y referencias en `docs\environments.md`; separar usuarios por base/runtime/publicación, conservar autenticación runtime vigente cuando sea válida y no conceder administración de servidor/db_owner como atajo.
+
+  Avance T010/T011 del 2026-11-06: consulta real staging confirmo ausencia del usuario
+  publicador. Con autorizacion se creo el usuario externo por client ID con solo
+  CONNECT/VIEW DEFINITION, sin roles ni DDL/datos; permisos efectivos verificados
+  por impersonacion y catalogo independiente. Runtime sin cambios. Scripts/hashes
+  en evidencia privada referenciada en la guia. No completa la auditoria de todos
+  los principals ni acredita login OIDC/aislamiento o publicacion DacFx.
+
 - [X] T012 [US1] Con autorización explícita, asignar identidad por sistema a `authcraft-api-staging` y Secrets User solo en `authcraft-vault-staging`; verificar acceso a su vault sin exponer valores y denegación al vault production mediante revisión de permisos. Registrar evidencia en `docs\environments.md`; no adjuntar publicadores al runtime ni cambiar la identidad production.
 - [ ] T013 [US1] Reejecutar `scripts\Test-EnvironmentInventory.ps1` y pruebas T005; actualizar `docs\environments.md` con evidencias por control y discrepancias pendientes, comprobando el 100% de asignaciones y límites SQL/vault antes de declarar US1 completa. Recursos inaccesibles, gates no autorizados o discrepancias críticas mantienen la historia pendiente.
 
@@ -113,6 +121,15 @@ No agregar tablas para el modelo operativo de publicaciones.
 
 - [ ] T028 [US3] Con autorización explícita, deshabilitar primero la publicación directa production existente en GitHub y reconciliar `.github\workflows\main_authcraft-api.yml` y `.github\workflows\main_authcraft-api-staging.yml` contra main remoto sin sobrescribir cambios locales; registrar estado remoto en `docs\environments.md`. No fusionar/activar el nuevo flujo mientras quede un publicador paralelo o ejecución antigua capaz de modificar production.
 - [ ] T029 [US3] Con autorización explícita y auditoría T009, inhabilitar confianza GitHub main y credenciales alternativas de publicación production, revisar publicadores adjuntos y desacoplarlos solo si no afecta consumidores/runtime; conservar `oidc-msi-a9fa` si su uso sigue sin resolver y quitar su capacidad publicadora utilizable si corresponde. Verificar cero rutas de publicación production efectivas y registrar evidencia en `docs\environments.md`, manteniendo identidad por sistema/vault y servicio actual.
+
+  Avance 2026-11-06: con autorizacion especifica se retiraron la federacion main
+  production, ambos roles Website Contributor y el secreto GitHub SQL antiguo.
+  Se verificaron cero roles/federaciones de esos publicadores y se preservaron
+  identidades/adjuntos/runtime/vault/Staging. El inventario ahora detecta rutas
+  alternativas ARM/federacion/SCM/FTP/secreto antiguo con 21 pruebas aisladas.
+  T029 sigue pendiente: no se revoco ni verifico la credencial SQL original; borrar
+  su copia GitHub no demuestra cero rutas SQL. Evidencia y limites en la guia.
+
 - [X] T030 [US3] Implementar SQL readiness no destructivo con timeout/cancelación en `Infrastructure\Health\DatabaseReadinessCheck.cs`, sin tablas de negocio, y respuestas contractuales en `authcraft-api\Controllers\HealthController.cs`; cablear DI/rutas en `authcraft-api\Program.cs` preservando autenticación/CORS de negocio y errores sanitizados.
 - [X] T031 [US3] Incorporar versión commit inmutable en `authcraft-api\authcraft-api.csproj` durante build/publish y probar su uso por salud; implementar `scripts\New-ReleaseManifest.ps1` para paquete API y DACPAC reales con SHA-256, commit/run ID y rechazo de faltantes/duplicados; usar exactamente los campos de `specs\001-environment-separation\contracts\environment-deployment.md`, sin secretos en paquetes.
 - [ ] T032 [US3] Implementar `scripts\Test-ReleasePreflight.ps1` reutilizando inventario T007, con comprobación de referencia main, identidad/scope, destino, configuración requerida, permisos, procedencia de la misma ejecución y "`Hash distinto, versión superada o evidencia staging de otro release invalida promoción.`"; comparar último release satisfactorio por evidencia Actions, fallar ante ausencia de evidencia necesaria y no crear tabla de versiones.
@@ -121,10 +138,33 @@ No agregar tablas para el modelo operativo de publicaciones.
 - [ ] T035 [US3] Construir el único workflow vigente en `.github\workflows\main_authcraft-api.yml`: PR solo build/pruebas sin Azure; push main/workflow_dispatch main construyen API y SQL una vez, ejecutan pruebas SQL locales en runner preparado, publican manifiesto/paquetes con retención acordada, preflight/evaluación/revisión acreditada de cambios SQL/esquema antes de API/smoke staging, contents:read global e id-token:write solo jobs Azure; permitir reanudar el mismo release tras revisión sin reconstrucción, serializar publicación completa con cancel-in-progress:false y production sin job publicador efectivo. La revisión SQL staging no sustituye aprobación protegida production.
 - [X] T036 [US3] Con autorización explícita, configurar ASPNETCORE_ENVIRONMENT=Staging, vault esperado y secretos exclusivos requeridos en `authcraft-api-staging`/`authcraft-vault-staging`; revisar configuración pública production sin publicarla ni activar transición JWT/alterar bootstrap. Documentar claves/capacidades opcionales y fuentes en `docs\environments.md`, sin copiar secretos production.
 - [ ] T037 [US3] Con autorización explícita, establecer/vincular `authcraft-api-st-id-97cc` como publicador OIDC main limitado a staging, verificar issuer/audiencia/prefijo inmutable y usuario SQL contenido con permisos DacFx mínimos probados en su propia base; no conceder permisos production ni exigir environments privados no disponibles. Registrar verificación de token/scope sin JWT completo en `docs\environments.md`.
+
+  Avance 2026-11-06: `authcraft-staging-schema-publisher` ya existe con SID del
+  client ID correcto y solo CONNECT/VIEW DEFINITION. No puede publicar ni ejecutar
+  el postdeploy; faltan privilegios revisados y DacFx/login con token OIDC real.
+  La impersonacion y el test LocalDB de grants no sustituyen esa evidencia.
+
+  Avance posterior: preparado job manual opt-in `verify-staging-publisher` y
+  wrapper/test SQL de solo lectura para login OIDC real con usuario/SID esperados.
+  PR no obtiene OIDC, skip no cuenta como prueba ejecutada y no hay pasos de
+  despliegue. Consulta/assertions probadas en LocalDB real, incluidos grants
+  inesperados; controles del wrapper probados con dependencias simuladas.
+  Usuario autorizo solo preparacion local: no commit/push/dispatch. T037 pendiente
+  de ejecucion autentica y permisos DacFx de publicacion revisados.
+
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 - [ ] T039 [US3] Implementar registro en el resumen/artefacto protegido de `.github\workflows\main_authcraft-api.yml` de DeploymentAttempt con "`result`: pending | blocked | failed | succeeded.", timestamps, versión/destino y resultados preflight/esquema/API/salud/autenticación; CandidateRelease con "`state`: built | staging_failed | staging_validated | awaiting_approval | production_blocked | approved | production_failed | published.", marcando production_blocked tras staging sin aprobación disponible y sin sugerir que production fue publicado; verificar estados con ejecuciones simuladas antes de activar el workflow.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
+
+**Avance local 2026-11-06 (T032/T033, aun pendientes)**: T032 ya contrasta procedencia
+Actions, build, retencion y archivos descargados de la misma ejecucion, y consulta
+el ultimo job `deploy-staging` satisfactorio para contrastar el SHA anterior.
+Sigue devolviendo bloqueo/no cero hasta integrar inventario, identidad, configuracion
+y permisos efectivos. T033 tiene pruebas aisladas de revision GitHub autenticada,
+rechazo de campos duplicados, autor/destino/release incorrectos, revocacion,
+reevaluacion de plan y bloqueo por deriva; no acredita usuario contenido ni grants
+Entra reales. No completar estas tareas solo por pasar las pruebas simuladas.
 
 **Checkpoint**: Staging validado y production sin publicador efectivo. No declarar la feature completa.
 
@@ -138,7 +178,7 @@ No agregar tablas para el modelo operativo de publicaciones.
 
 ### Tests for User Story 4
 
-- [ ] T042 [P] [US4] Añadir `authcraft-api.Tests\ProductionApprovalTests.cs` para protección ausente/no compatible, aprobación rechazada/de otro release, referencia no autorizada, reporte revisado cambiado y artefacto expirado; comprobar cero modificaciones con simulaciones aisladas y que workflow_dispatch/booleanos/PR de main no se aceptan como aprobación posterior a staging.
+- [X] T042 [P] [US4] Añadir `authcraft-api.Tests\ProductionApprovalTests.cs` para protección ausente/no compatible, aprobación rechazada/de otro release, referencia no autorizada, reporte revisado cambiado y artefacto expirado; comprobar cero modificaciones con simulaciones aisladas y que workflow_dispatch/booleanos/PR de main no se aceptan como aprobación posterior a staging.
 - [ ] T043 [P] [US4] Añadir `authcraft-api.Tests\DeploymentRecoveryTests.cs` para fallo de esquema antes de API, fallo API con esquema aplicado, paquete anterior incompatible y protección de escrituras recientes; comprobar que no se dispara reversión/restauración destructiva automática y que se bloquean siguientes etapas.
 
 ### Implementation for User Story 4

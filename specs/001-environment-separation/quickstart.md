@@ -32,6 +32,36 @@ Esperado: recursos confirmados, aplicaciones con identidades runtime distintas t
 implementación y sin workflows directos activos a production. Registrar discrepancias,
 no resolverlas con cambios automáticos. Running no demuestra salud.
 
+El 2026-11-06 se retiró con autorización la federación main de `oidc-msi-aede`.
+Con autorización posterior también se retiraron sus roles Website Contributor y el
+secreto GitHub `AZURE_SQL_CONNECTION_STRING`; ambas identidades se conservaron
+adjuntas, sin roles ARM ni federaciones. Esto no revoca la credencial SQL original
+ni acredita ausencia de otras copias: T029 sigue pendiente. No eliminar identidades
+por inferencia ni reactivar el workflow anterior. Ver
+[evidencia y límites](../../docs/environments.md#retiro-autorizado-de-permisos-publicadores-2026-11-06).
+
+El inventario ahora verifica también publicadores adjuntos, roles runtime,
+SCM/FTP y nombres de secretos de repositorio; necesita permisos para consultar
+estos metadatos. Ausencia de acceso/evidencia bloquea, no equivale a controles seguros.
+La lectura real de las 16:22 UTC siguió bloqueada por falta de ajustes explícitos
+de ambiente/vault Production, no por roles publicadores residuales.
+
+Comprobar el bloqueo local de Production sin conexiones remotas:
+
+```powershell
+dotnet test .\authcraft-api.Tests\authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~ProductionApprovalTests|FullyQualifiedName~DeploymentPipelineTests|FullyQualifiedName~DatabaseDeploymentReviewTests|FullyQualifiedName~DeploymentRecoveryTests"
+```
+
+Estas pruebas acreditan el rechazo vigente, incluso ante dispatch o aprobación
+aportada libremente; no acreditan una promoción protegida disponible.
+
+Desde el 2026-11-06 existe en Staging el usuario externo
+`authcraft-staging-schema-publisher`, vinculado al client ID del publicador.
+Solo tiene CONNECT/VIEW DEFINITION: **no está habilitado para Publish ni postdeploy**.
+No sustituirlo por el token administrativo de auditoría. Ver
+[permisos comprobados y límites](../../docs/environments.md#usuario-sql-del-publicador-evaluacion-minima-verificada).
+T037 requiere todavía login OIDC real y permisos DacFx revisados/probados.
+
 ## 2. Construir y validar development
 
 ```powershell
@@ -133,9 +163,20 @@ Medir preparación ≤30 minutos con prerrequisitos disponibles.
 Al 2026-11-06, GitHub todavía tiene activo el workflow staging anterior: su último
 run fallo en el build de la solucion (`MSB4278`) y no ejecuto el despliegue. La
 propuesta local en `.github/workflows/main_authcraft-api-staging.yml` separa los
-builds API/SQL y genera artefactos, pero es solo de validacion: no autentica en Azure
-ni publica. No despachar ni hacer push hasta reconciliar y aprobar los gates de
-despliegue indicados abajo.
+builds API/SQL y genera artefactos, pero no publica. Ahora incluye un diagnostico
+OIDC/SQL opcional, aun sin subir ni ejecutar: input
+`verify_staging_publisher=false` por defecto. El usuario autorizo solo preparacion
+local, sin commit/push. No ejecutar el diagnostico remoto hasta aprobar expresamente
+su publicacion/dispatch; no confundirlo con autorizar un despliegue.
+
+Una vez revisado y autorizado el commit/push del workflow sin despliegue, se podra
+despachar en main con `verify_staging_publisher=true`. Primero valida/crea los
+paquetes, luego autentica exclusivamente como publicador staging y consulta sus
+permisos reales en `authcraft-db-staging`. No configura firewall ni concede permisos.
+Cuenta equivocada, fallo SQL o prueba omitida bloquean. Solo un test ejecutado y
+aprobado acredita el login; `deployment_authorized` permanece false.
+Ver [limites del diagnostico](../../docs/environments.md#diagnostico-oidc-preparado-sin-ejecutar-remotamente).
+Este diagnostico puede reactivar SQL pausado y no prueba aun permisos DacFx Publish.
 
 Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
 y retirar rutas production, publicar un commit main desde el único flujo vigente.
@@ -145,6 +186,23 @@ staging solo tras aplicar su esquema compatible, antes del smoke, con autorizaci
 de la escritura y sin enviar notificaciones.
 Registrar run ID, manifiesto, hashes y reporte SQL; comprobar el destino
 `authcraft-api-staging` y base `authcraft-db-staging` antes de escribir.
+
+El preflight actual solo tiene implementada la parte de procedencia de artefactos:
+consulta Actions autenticado, vuelve a descargar y compara API/DACPAC/manifiesto,
+y contrasta la version anterior con un job `deploy-staging` exitoso del workflow
+consolidado. Sin historial verificable no acepta un SHA anterior arbitrario. Mientras
+no se integren inventario, identidad, configuracion y permisos SQL, devuelve
+`state=blocked` y codigo no cero incluso si `artifact_validation=verified`.
+No omitir ese bloqueo para probar una publicacion.
+
+La revision SQL debe estar en una issue abierta de `leoperetti/authcraft-api`,
+como comentario de `leoperetti`, con exactamente una linea por campo del
+[contrato de revision](contracts/environment-deployment.md#evidencia-de-revisión-de-compatibilidad).
+El publicador vuelve a consultar el comentario y a generar el plan antes de Publish.
+Rechazo, campos repetidos, cambio de hashes, error de API o revocacion bloquean.
+Conservar report/script originales y los archivos `staging-recheck-*` con acceso
+restringido. Las pruebas locales sustituyen GitHub y SqlPackage; no demuestran
+que el publicador tenga permisos SQL en Azure.
 
 Obtener hostname desde ARM; no construir `<app>.azurewebsites.net` por suposición.
 Tras implementación/autorización:

@@ -25,6 +25,13 @@ $originalGitHubToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
 if ($Mode -eq 'Publish' -and $TargetEnvironment -ne 'staging') {
     throw 'Production database publication is blocked until protected approval is available.'
 }
+if ($AllowedReviewer -cne 'leoperetti') {
+    throw 'The SQL reviewer must match the repository-approved reviewer.'
+}
+if ($ExpectedCommitSha -notmatch '^[A-Fa-f0-9]{40}$' -or
+    $ExpectedRunId -notmatch '^[1-9][0-9]*$') {
+    throw 'Release commit and run metadata are missing or malformed.'
+}
 if (-not (Test-Path -LiteralPath $DacpacPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw 'DACPAC and release manifest files are required.'
@@ -66,7 +73,7 @@ $commonArguments = @(
     "/SourceFile:$((Resolve-Path -LiteralPath $DacpacPath).Path)",
     "/TargetServerName:tcp:$targetServer,1433",
     "/TargetDatabaseName:$targetDatabase",
-    '/TargetTrustServerCertificate:True',
+    '/TargetTrustServerCertificate:False',
     '/p:BlockOnPossibleDataLoss=True',
     '/p:DropObjectsNotInSource=False',
     "/AccessToken:$sqlAccessToken"
@@ -78,17 +85,65 @@ function Invoke-SqlPackage {
         [string[]]$Arguments
     )
 
-    if ([IO.Path]::GetExtension($Path) -ieq '.ps1') {
-        & powershell.exe -NoProfile -NonInteractive -File $Path @Arguments
+    try {
+        if ([IO.Path]::GetExtension($Path) -ieq '.ps1') {
+            & powershell.exe -NoProfile -NonInteractive -File $Path @Arguments *> $null
+        }
+        else {
+            & $Path @Arguments *> $null
+        }
+        return $LASTEXITCODE
     }
-    else {
-        & $Path @Arguments
+    catch {
+        throw 'SqlPackage invocation failed. Inspect the target; no rollback was attempted. Command output is withheld to protect credentials.'
     }
+}
 
-    return $LASTEXITCODE
+function Get-AuthenticatedReview {
+    try {
+        $issue = Invoke-RestMethod -Uri $issueUri -Headers $headers -Method Get -TimeoutSec 30
+        $comments = @(Invoke-RestMethod -Uri "$issueUri/comments?per_page=100" -Headers $headers -Method Get -TimeoutSec 30)
+    }
+    catch {
+        throw 'Authenticated deployment review could not be retrieved from GitHub.'
+    }
+    if ($issue.state -ne 'open' -or $issue.pull_request) {
+        throw 'Deployment review must be recorded on an open GitHub issue.'
+    }
+    if ($comments.Count -ge 100) {
+        throw 'Review issue exceeds the verifiable comment limit; use a new review issue.'
+    }
+    $reviewComments = @($comments | Where-Object {
+        $_.user.login -ceq $AllowedReviewer -and $_.body -match '(?im)^\s*deployment_review\s*='
+    } | Sort-Object created_at, id)
+    if ($reviewComments.Count -eq 0) {
+        throw 'No authenticated deployment review was found.'
+    }
+    $latestReview = $reviewComments[-1]
+    if ([string]$latestReview.id -notmatch '^[1-9][0-9]*$' -or
+        -not (Test-DeploymentReviewRecord `
+                -Body $latestReview.body `
+                -Author $latestReview.user.login `
+                -AllowedReviewer $AllowedReviewer `
+                -RunId $ExpectedRunId `
+                -CommitSha $ExpectedCommitSha `
+                -TargetEnvironment $TargetEnvironment `
+                -DatabaseServer $targetServer `
+                -DatabaseName $targetDatabase `
+                -DacpacSha256 $dacpacHash `
+                -ReportSha256 $reportHash `
+                -ScriptSha256 $scriptHash)) {
+        throw 'Latest authenticated review does not approve this exact release, destination, and SQL plan.'
+    }
+    return $latestReview
 }
 
 try {
+    foreach ($outputPath in @($reportPath, $scriptPath)) {
+        if (Test-Path -LiteralPath $outputPath) {
+            Remove-Item -LiteralPath $outputPath -Force
+        }
+    }
     $reportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$reportPath"))
     if ($reportExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
         throw 'SqlPackage DeployReport failed. No database changes were made.'
@@ -101,6 +156,10 @@ try {
 
     $reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $scriptHash = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Import-Module (Join-Path $PSScriptRoot 'DeploymentReview.psm1') -Force
+    if (-not (Test-LocalDeploymentScriptSafety -ScriptContent (Get-Content -LiteralPath $scriptPath -Raw))) {
+        throw 'Deployment script contains destructive statements; automatic publication is blocked.'
+    }
     if ($Mode -eq 'Evaluate') {
         [pscustomobject]@{
             state = 'evaluated'
@@ -127,42 +186,40 @@ try {
         throw 'Authenticated GitHub review access is unavailable.'
     }
 
-    Import-Module (Join-Path $PSScriptRoot 'DeploymentReview.psm1') -Force
     $headers = @{
         Authorization = "Bearer $githubToken"
         Accept = 'application/vnd.github+json'
         'X-GitHub-Api-Version' = '2022-11-28'
     }
     $issueUri = "https://api.github.com/repos/$repository/issues/$ReviewIssueNumber"
-    $issue = Invoke-RestMethod -Uri $issueUri -Headers $headers -Method Get
-    if ($issue.state -ne 'open' -or $issue.pull_request) {
-        throw 'Deployment review must be recorded on an open GitHub issue.'
-    }
-    $comments = @(Invoke-RestMethod -Uri "$issueUri/comments?per_page=100" -Headers $headers -Method Get)
-    if ($comments.Count -ge 100) {
-        throw 'Review issue exceeds the verifiable comment limit; use a new review issue.'
-    }
+    $review = Get-AuthenticatedReview
 
-    $reviewComments = @($comments | Where-Object {
-        $_.user.login -ceq $AllowedReviewer -and $_.body -match '(?im)^\s*deployment_review\s*='
-    } | Sort-Object created_at)
-    if ($reviewComments.Count -eq 0) {
-        throw 'No authenticated deployment review was found.'
+    $recheckReportPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck-report.xml"
+    $recheckScriptPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck.sql"
+    foreach ($outputPath in @($recheckReportPath, $recheckScriptPath)) {
+        if (Test-Path -LiteralPath $outputPath) {
+            Remove-Item -LiteralPath $outputPath -Force
+        }
     }
-    $review = $reviewComments[-1]
-    if (-not (Test-DeploymentReviewRecord `
-                -Body $review.body `
-                -Author $review.user.login `
-                -AllowedReviewer $AllowedReviewer `
-                -RunId $ExpectedRunId `
-                -CommitSha $ExpectedCommitSha `
-                -TargetEnvironment $TargetEnvironment `
-                -DatabaseServer $targetServer `
-                -DatabaseName $targetDatabase `
-                -DacpacSha256 $dacpacHash `
-                -ReportSha256 $reportHash `
-                -ScriptSha256 $scriptHash)) {
-        throw 'Latest authenticated review does not approve this exact release, destination, and SQL plan.'
+    $recheckReportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$recheckReportPath"))
+    if ($recheckReportExitCode -ne 0 -or -not (Test-Path -LiteralPath $recheckReportPath -PathType Leaf)) {
+        throw 'SqlPackage DeployReport revalidation failed. Publication is blocked.'
+    }
+    $recheckScriptExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Script') + $commonArguments + @("/DeployScriptPath:$recheckScriptPath"))
+    if ($recheckScriptExitCode -ne 0 -or -not (Test-Path -LiteralPath $recheckScriptPath -PathType Leaf)) {
+        throw 'SqlPackage Script revalidation failed. Publication is blocked.'
+    }
+    if ((Get-FileHash -LiteralPath $DacpacPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $dacpacHash -or
+        (Get-FileHash -LiteralPath $recheckReportPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $reportHash -or
+        (Get-FileHash -LiteralPath $recheckScriptPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $scriptHash) {
+        throw 'DACPAC or SQL plan changed after review. A new review is required.'
+    }
+    $recheckedReview = Get-AuthenticatedReview
+    if ($recheckedReview.id -ne $review.id -or $recheckedReview.body -cne $review.body) {
+        throw 'Deployment review changed during revalidation. Publication is blocked.'
+    }
+    if ((Get-FileHash -LiteralPath $DacpacPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $dacpacHash) {
+        throw 'DACPAC changed during approval revalidation. Publication is blocked.'
     }
 
     $publishExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Publish') + $commonArguments)

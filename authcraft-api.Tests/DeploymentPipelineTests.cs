@@ -35,17 +35,45 @@ public sealed class DeploymentPipelineTests
     }
 
     [Fact]
-    public void Preflight_AllowsOnlyNewerMainReleaseWithMatchingManifestHashes()
+    public void Preflight_VerifiesNewerMainArtifactsButKeepsUnimplementedDeploymentGatesBlocked()
     {
         using var sandbox = new PipelineSandbox();
         Assert.Equal(0, sandbox.CreateManifest().ExitCode);
 
         var result = sandbox.RunPreflight("refs/heads/main", "staging", sandbox.ParentCommitSha);
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.NotEqual(0, result.ExitCode);
         using var preflight = JsonDocument.Parse(result.Output);
-        Assert.Equal("ready", preflight.RootElement.GetProperty("state").GetString());
+        Assert.Equal("blocked", preflight.RootElement.GetProperty("state").GetString());
+        Assert.Equal("verified", preflight.RootElement.GetProperty("artifact_validation").GetString());
+        Assert.False(preflight.RootElement.GetProperty("deployment_authorized").GetBoolean());
         Assert.Equal("authcraft-db-staging", preflight.RootElement.GetProperty("database_name").GetString());
+    }
+
+    [Theory]
+    [InlineData("wrong-repository")]
+    [InlineData("wrong-run")]
+    [InlineData("wrong-baseline")]
+    [InlineData("expired-artifact")]
+    [InlineData("expired-at-date")]
+    [InlineData("duplicate-artifact")]
+    [InlineData("truncated-artifacts")]
+    [InlineData("truncated-jobs")]
+    [InlineData("missing-baseline")]
+    [InlineData("build-only-baseline")]
+    [InlineData("failed-build")]
+    [InlineData("untrusted-event")]
+    [InlineData("download-tamper")]
+    [InlineData("metadata-error")]
+    public void Preflight_BlocksUnverifiedActionsProvenance(string scenario)
+    {
+        using var sandbox = new PipelineSandbox();
+        Assert.Equal(0, sandbox.CreateManifest().ExitCode);
+
+        var result = sandbox.RunPreflight("refs/heads/main", "staging", sandbox.ParentCommitSha, scenario: scenario);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.DoesNotContain("\"artifact_validation\":\"verified\"", result.Output, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -202,18 +230,87 @@ public sealed class DeploymentPipelineTests
                 "-OutputPath", ManifestPath);
         }
 
-        public ProcessResult RunPreflight(string gitHubRef, string target, string lastCommitSha, string runId = "12345")
+        public ProcessResult RunPreflight(
+            string gitHubRef, string target, string lastCommitSha, string runId = "12345", string scenario = "")
         {
-            return RunPowerShell(Path.Combine(_scriptsDirectory, "Test-ReleasePreflight.ps1"),
-                "-ManifestPath", ManifestPath,
-                "-ApiArtifactPath", ApiPath,
-                "-DatabaseArtifactPath", DacpacPath,
-                "-ExpectedCommitSha", CommitSha,
-                "-ExpectedRunId", runId,
-                "-GitHubRef", gitHubRef,
-                "-TargetEnvironment", target,
-                "-LastSuccessfulCommitSha", lastCommitSha,
-                "-RepositoryPath", _gitRepositoryPath);
+            var harnessPath = Path.Combine(DirectoryPath, "preflight-harness.ps1");
+            File.WriteAllText(harnessPath, $$"""
+                $ErrorActionPreference = 'Stop'
+                function gh {
+                    $global:LASTEXITCODE = 0
+                    if ('{{scenario}}' -eq 'metadata-error') { $global:LASTEXITCODE = 1; return }
+                    if ($args[0] -eq 'run' -and $args[1] -eq 'download') {
+                        $name = $args[[Array]::IndexOf($args, '--name') + 1]
+                        $destination = $args[[Array]::IndexOf($args, '--dir') + 1]
+                        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+                        switch ($name) {
+                            'api' { Copy-Item -LiteralPath '{{ApiPath}}' -Destination (Join-Path $destination 'api.zip') }
+                            'dacpac' { Copy-Item -LiteralPath '{{DacpacPath}}' -Destination (Join-Path $destination 'database.dacpac') }
+                            'release-manifest' { Copy-Item -LiteralPath '{{ManifestPath}}' -Destination (Join-Path $destination 'manifest.json') }
+                            default { throw 'Unexpected artifact download.' }
+                        }
+                        if ('{{scenario}}' -eq 'download-tamper' -and $name -eq 'api') {
+                            Add-Content -LiteralPath (Join-Path $destination 'api.zip') -Value 'changed'
+                        }
+                        return
+                    }
+                    if ($args[0] -ne 'api') { throw 'Unexpected GitHub command.' }
+                    switch ($args[1]) {
+                        'repos/leoperetti/authcraft-api/actions/runs/12345' {
+                            $repository = 'leoperetti/authcraft-api'
+                            if ('{{scenario}}' -eq 'wrong-repository') { $repository = 'other/repository' }
+                            $sha = '{{CommitSha}}'
+                            if ('{{scenario}}' -eq 'wrong-run') { $sha = '{{ParentCommitSha}}' }
+                            $event = 'workflow_dispatch'
+                            if ('{{scenario}}' -eq 'untrusted-event') { $event = 'pull_request' }
+                            return (@{ id = 12345; head_sha = $sha; head_branch = 'main'; event = $event;
+                                path = '.github/workflows/main_authcraft-api-staging.yml';
+                                repository = @{ full_name = $repository }; head_repository = @{ full_name = $repository }
+                            } | ConvertTo-Json -Depth 4 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12345/jobs?per_page=100' {
+                            $conclusion = 'success'
+                            if ('{{scenario}}' -eq 'failed-build') { $conclusion = 'failure' }
+                            $total = 1
+                            if ('{{scenario}}' -eq 'truncated-jobs') { $total = 2 }
+                            return (@{ total_count = $total; jobs = @(@{ name = 'validate'; status = 'completed'; conclusion = $conclusion }) } | ConvertTo-Json -Depth 4 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12345/artifacts?per_page=100' {
+                            $names = @('api', 'dacpac', 'release-manifest')
+                            if ('{{scenario}}' -eq 'duplicate-artifact') { $names += 'api' }
+                            $total = $names.Count
+                            if ('{{scenario}}' -eq 'truncated-artifacts') { $total++ }
+                            $expires = [DateTime]::UtcNow.AddDays(1)
+                            if ('{{scenario}}' -eq 'expired-at-date') { $expires = [DateTime]::UtcNow.AddMinutes(-1) }
+                            return (@{ total_count = $total; artifacts = $names | ForEach-Object {
+                                @{ name = $_; expired = ('{{scenario}}' -eq 'expired-artifact');
+                                    expires_at = $expires.ToString('o'); workflow_run = @{ id = 12345; head_sha = '{{CommitSha}}' } }
+                            } } | ConvertTo-Json -Depth 5 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/workflows/main_authcraft-api.yml/runs?branch=main&status=success&per_page=100' {
+                            if ('{{scenario}}' -eq 'missing-baseline') { return '{"total_count":0,"workflow_runs":[]}' }
+                            $sha = '{{ParentCommitSha}}'
+                            if ('{{scenario}}' -eq 'wrong-baseline') { $sha = '{{RemoteMainSha}}' }
+                            return (@{ total_count = 1; workflow_runs = @(@{ id = 12344; head_sha = $sha; head_branch = 'main';
+                                path = '.github/workflows/main_authcraft-api.yml'; status = 'completed'; conclusion = 'success';
+                                event = 'workflow_dispatch'; repository = @{ full_name = 'leoperetti/authcraft-api' };
+                                head_repository = @{ full_name = 'leoperetti/authcraft-api' } }) } | ConvertTo-Json -Depth 5 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12344/jobs?per_page=100' {
+                            if ('{{scenario}}' -eq 'build-only-baseline') {
+                                return '{"total_count":1,"jobs":[{"name":"build","status":"completed","conclusion":"success"}]}'
+                            }
+                            return '{"total_count":1,"jobs":[{"name":"deploy-staging","status":"completed","conclusion":"success"}]}'
+                        }
+                        default { throw 'Unexpected GitHub API request.' }
+                    }
+                }
+                & '{{Path.Combine(_scriptsDirectory, "Test-ReleasePreflight.ps1")}}' `
+                    -ManifestPath '{{ManifestPath}}' -ApiArtifactPath '{{ApiPath}}' -DatabaseArtifactPath '{{DacpacPath}}' `
+                    -ExpectedCommitSha '{{CommitSha}}' -ExpectedRunId '{{runId}}' -GitHubRef '{{gitHubRef}}' `
+                    -TargetEnvironment '{{target}}' -LastSuccessfulCommitSha '{{lastCommitSha}}' -RepositoryPath '{{_gitRepositoryPath}}'
+                """);
+            return RunPowerShell(harnessPath);
         }
 
         public void Dispose()

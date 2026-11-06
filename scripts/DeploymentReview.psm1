@@ -32,9 +32,10 @@ function Test-DeploymentReviewRecord {
     }
 
     foreach ($field in $expectedFields.GetEnumerator()) {
-        $pattern = '(?im)^\s*' + [Regex]::Escape($field.Key) + '\s*=\s*' +
-            [Regex]::Escape([string]$field.Value) + '\s*$'
-        if (-not [Regex]::IsMatch($Body, $pattern)) {
+        $pattern = '(?im)^[ \t]*' + [Regex]::Escape($field.Key) + '[ \t]*=[ \t]*([^\r\n]*)\r?$'
+        $entries = [Regex]::Matches($Body, $pattern)
+        if ($entries.Count -ne 1 -or
+            $entries[0].Groups[1].Value.Trim() -cne [string]$field.Value) {
             return $false
         }
     }
