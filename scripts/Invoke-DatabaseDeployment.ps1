@@ -99,6 +99,23 @@ function Invoke-SqlPackage {
             $diagnosticText = $nativeOutput -join "`n"
             $codes = @([Regex]::Matches($diagnosticText, '\bSQL[0-9]{5,6}\b') |
                 ForEach-Object { $_.Value } | Sort-Object -Unique)
+            $permissionNames = @(
+                'VIEW DATABASE STATE', 'VIEW DATABASE PERFORMANCE STATE', 'VIEW DATABASE SECURITY STATE',
+                'VIEW DEFINITION', 'VIEW ANY DEFINITION', 'VIEW SERVER STATE',
+                'ALTER ANY USER', 'ALTER ANY ROLE', 'ALTER ANY SCHEMA', 'CREATE TABLE',
+                'ALTER', 'CONTROL', 'SELECT', 'SHOWPLAN', 'CONNECT'
+            )
+            $mentionedPermissions = @($permissionNames | Where-Object {
+                [Regex]::IsMatch($diagnosticText, '(?i)\b' + [Regex]::Escape($_) + '\b')
+            })
+            $permissionChecks = [ordered]@{
+                alter_database_denied = '(?i)(?:does not have permission|permission.*denied)[^\r\n]*\balter\b[^\r\n]*\bdatabase\b'
+                view_definition_denied = '(?i)(?:do not have|does not have|denied)[^\r\n]*\bview definition\b|\bview definition\b[^\r\n]*\bdenied\b'
+                master_access_denied = '(?i)(?:permission|access)[^\r\n]*\bmaster\b|\bmaster\b[^\r\n]*(?:permission|access)'
+            }
+            $matchedChecks = @($permissionChecks.GetEnumerator() | Where-Object {
+                [Regex]::IsMatch($diagnosticText, $_.Value)
+            } | ForEach-Object { $_.Key })
             $category = 'unclassified'
             if ($diagnosticText -match '(?i)VIEW DATABASE (?:PERFORMANCE |SECURITY )?STATE') {
                 $category = 'database_state_permission'
@@ -109,7 +126,7 @@ function Invoke-SqlPackage {
             } elseif ($diagnosticText -match '(?i)connection.*timeout|server was not found|database.*unavailable|firewall') {
                 $category = 'connectivity'
             }
-            $script:sqlPackageFailure = "exit_code=$exitCode; diagnostic_category=$category; diagnostic_codes=$($codes -join ',')"
+            $script:sqlPackageFailure = "exit_code=$exitCode; diagnostic_category=$category; diagnostic_codes=$($codes -join ','); mentioned_permissions=$($mentionedPermissions -join ','); permission_checks=$($matchedChecks -join ',')"
         }
         return $exitCode
     }
