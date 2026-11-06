@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace authcraft_api.Tests;
 
@@ -170,6 +173,15 @@ public sealed class StagingPublisherVerificationTests
                 UseShellExecute = false,
                 WorkingDirectory = directory
             };
+            using var diagnosticKey = RSA.Create(2048);
+            var publicKey = diagnosticKey.ExportParameters(false);
+            var encryptedDiagnosticPath = Path.Combine(directory, "diagnostic.encrypted.json");
+            processInfo.Environment["AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY"] = JsonSerializer.Serialize(new
+            {
+                modulus = Convert.ToBase64String(publicKey.Modulus!),
+                exponent = Convert.ToBase64String(publicKey.Exponent!)
+            });
+            processInfo.Environment["AUTHCRAFT_SQL_DIAGNOSTIC_PATH"] = encryptedDiagnosticPath;
             foreach (var argument in new[]
                      {
                          "-NoProfile", "-NonInteractive", "-File", scriptPath,
@@ -209,6 +221,17 @@ public sealed class StagingPublisherVerificationTests
                 Assert.Contains("mentioned_permissions=VIEWDATABASESTATE,ALTER,SELECT", compactError, StringComparison.Ordinal);
                 Assert.Contains("permission_checks=sql_expression_dependencies_select_denied,alter_database_denied", compactError, StringComparison.Ordinal);
                 Assert.Contains("denied_system_objects=sys.sql_expression_dependencies", compactError, StringComparison.Ordinal);
+                var encryptedText = File.ReadAllText(encryptedDiagnosticPath);
+                Assert.DoesNotContain("sensitive-native-diagnostic", encryptedText, StringComparison.Ordinal);
+                Assert.DoesNotContain("synthetic.test.token", encryptedText, StringComparison.Ordinal);
+                using var encryptedDiagnostic = JsonDocument.Parse(encryptedText);
+                Assert.Equal("RSA-OAEP-SHA256", encryptedDiagnostic.RootElement.GetProperty("algorithm").GetString());
+                var decryptedBytes = encryptedDiagnostic.RootElement.GetProperty("blocks").EnumerateArray()
+                    .SelectMany(block => diagnosticKey.Decrypt(Convert.FromBase64String(block.GetString()!),
+                        RSAEncryptionPadding.OaepSHA256)).ToArray();
+                var decryptedText = Encoding.UTF8.GetString(decryptedBytes);
+                Assert.Contains("sensitive-native-diagnostic", decryptedText, StringComparison.Ordinal);
+                Assert.Contains("synthetic.test.token", decryptedText, StringComparison.Ordinal);
             }
             Assert.DoesNotContain("Process environment was not restored", error, StringComparison.Ordinal);
             Assert.Empty(Directory.GetDirectories(directory, "authcraft-publisher-check-*"));

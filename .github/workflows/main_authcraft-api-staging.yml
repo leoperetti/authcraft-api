@@ -157,6 +157,8 @@ jobs:
         shell: pwsh
         env:
           EVALUATE_STAGING_SCHEMA: ${{ inputs.evaluate_staging_schema }}
+          AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY: ${{ vars.AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY }}
+          AUTHCRAFT_SQL_DIAGNOSTIC_PATH: ${{ runner.temp }}/staging-sql-diagnostic.encrypted.json
         run: |
           $parameters = @{}
           if ($env:EVALUATE_STAGING_SCHEMA -eq 'true') {
@@ -192,3 +194,12 @@ jobs:
             ${{ runner.temp }}/staging-schema-review/staging-deploy.sql
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retain opt-in encrypted SQL failure diagnostic
+        if: failure() && inputs.evaluate_staging_schema == true && vars.AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-sql-diagnostic-encrypted
+          path: ${{ runner.temp }}/staging-sql-diagnostic.encrypted.json
+          if-no-files-found: error
+          retention-days: 1

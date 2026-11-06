@@ -79,6 +79,46 @@ $commonArguments = @(
     "/AccessToken:$sqlAccessToken"
 )
 
+function Export-EncryptedSqlPackageDiagnostic {
+    param([string]$DiagnosticText)
+
+    if ([string]::IsNullOrWhiteSpace($env:AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY)) { return }
+    if ([string]::IsNullOrWhiteSpace($env:AUTHCRAFT_SQL_DIAGNOSTIC_PATH)) {
+        throw 'An encrypted SQL diagnostic output path is required.'
+    }
+    $rsa = $null
+    $plaintext = $null
+    try {
+        $publicKey = $env:AUTHCRAFT_SQL_DIAGNOSTIC_PUBLIC_KEY | ConvertFrom-Json
+        $parameters = New-Object Security.Cryptography.RSAParameters
+        $parameters.Modulus = [Convert]::FromBase64String($publicKey.modulus)
+        $parameters.Exponent = [Convert]::FromBase64String($publicKey.exponent)
+        $rsa = New-Object Security.Cryptography.RSACng
+        $rsa.ImportParameters($parameters)
+        if ($rsa.KeySize -lt 2048) { throw 'Diagnostic encryption requires RSA 2048 or stronger.' }
+        $plaintext = [Text.Encoding]::UTF8.GetBytes($DiagnosticText)
+        if ($plaintext.Length -gt 1048576) { throw 'SQL diagnostic exceeds the encrypted capture limit.' }
+        $blockSize = $rsa.KeySize / 8 - 66
+        $blocks = @(
+            for ($offset = 0; $offset -lt $plaintext.Length; $offset += $blockSize) {
+                $length = [Math]::Min($blockSize, $plaintext.Length - $offset)
+                $block = New-Object byte[] $length
+                [Array]::Copy($plaintext, $offset, $block, 0, $length)
+                [Convert]::ToBase64String($rsa.Encrypt($block, [Security.Cryptography.RSAEncryptionPadding]::OaepSHA256))
+            }
+        )
+        [ordered]@{
+            version = 1
+            algorithm = 'RSA-OAEP-SHA256'
+            blocks = $blocks
+        } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $env:AUTHCRAFT_SQL_DIAGNOSTIC_PATH -Encoding UTF8
+    }
+    finally {
+        if ($null -ne $rsa) { $rsa.Dispose() }
+        if ($null -ne $plaintext) { [Array]::Clear($plaintext, 0, $plaintext.Length) }
+    }
+}
+
 function Invoke-SqlPackage {
     param(
         [string]$Path,
@@ -97,6 +137,7 @@ function Invoke-SqlPackage {
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             $diagnosticText = $nativeOutput -join "`n"
+            Export-EncryptedSqlPackageDiagnostic -DiagnosticText $diagnosticText
             $codes = @([Regex]::Matches($diagnosticText, '\bSQL[0-9]{5,6}\b') |
                 ForEach-Object { $_.Value } | Sort-Object -Unique)
             $permissionNames = @(
