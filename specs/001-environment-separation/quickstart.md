@@ -57,10 +57,12 @@ aportada libremente; no acreditan una promoción protegida disponible.
 
 Desde el 2026-11-06 existe en Staging el usuario externo
 `authcraft-staging-schema-publisher`, vinculado al client ID del publicador.
-Solo tiene CONNECT/VIEW DEFINITION: **no está habilitado para Publish ni postdeploy**.
+Tiene CONNECT/VIEW DEFINITION y SELECT solo sobre
+`sys.sql_expression_dependencies`: **no esta habilitado para Publish ni postdeploy**.
 No sustituirlo por el token administrativo de auditoría. Ver
 [permisos comprobados y límites](../../docs/environments.md#usuario-sql-del-publicador-evaluacion-minima-verificada).
-T037 requiere todavía login OIDC real y permisos DacFx revisados/probados.
+Login OIDC real comprobado; T037 requiere todavia permisos DacFx suficientes
+revisados/probados.
 
 ## 2. Construir y validar development
 
@@ -186,6 +188,13 @@ Esta ampliación ya se subió/ejecutó con autorización: el run
 pasó login, pero DeployReport falló con `diagnostic_category=permission_denied`.
 No hay plan aprobado ni permisos DacFx suficientes acreditados. El error no
 identifica el grant faltante; no ampliar permisos por inferencia.
+Posteriormente se verifico SQL 229 al consultar `sys.sql_expression_dependencies`
+con impersonacion del publicador. Con autorizacion explicita se concedio SELECT
+solo sobre esa vista: consulta exitosa y sin DDL/DML ni acceso a datos de negocio.
+El run [42299486643](https://github.com/leoperetti/authcraft-api/actions/runs/42299486643)
+paso login/perfil actualizado, pero DeployReport sigue fallando con una mencion
+de SELECT sin objeto identificable. Este grant no resolvio por completo DacFx.
+No conceder SELECT de base, db_datareader ni db_owner para sortear el bloqueo.
 
 Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
 y retirar rutas production, publicar un commit main desde el único flujo vigente.

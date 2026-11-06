@@ -533,3 +533,47 @@ antes de cada push; ambos runs confirmaron el job validate. No se ampliaron gran
 modifico firewall, publico API, ejecuto postdeploy ni conecto Production durante
 estos diagnosticos. Los paquetes retenidos de estos runs no acreditan un release
 staging desplegado/validado ni sustituyen la revision SQL previa a Publish.
+
+### Correccion minima autorizada: lectura de dependencias del esquema
+
+La impersonacion SQL del principal esperado en `authcraft-db-staging` comprobo
+`can_read_dependencies=0` y SQL **229** al consultar
+`sys.sql_expression_dependencies`. No es una prueba de login OIDC; ese login ya
+se verifico independientemente en Actions.
+[Microsoft documenta](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-sql-expression-dependencies-transact-sql#permissions)
+VIEW DEFINITION de base y SELECT sobre esa vista como requisitos de lectura.
+
+Tras la aprobacion explicita **Aplicar y verificar**, se aplico exclusivamente:
+
+```sql
+GRANT SELECT ON OBJECT::sys.sql_expression_dependencies
+TO [authcraft-staging-schema-publisher];
+```
+
+La transaccion valido base, tipo externo y SID exactos del principal, ausencia
+de roles/grants inesperados y privilegios resultantes antes de COMMIT.
+Conexion independiente: `can_read_dependencies=1`, consulta sin error.
+ALTER/CONTROL/CREATE TABLE/SELECT e INSERT de providers/db_owner y numero de
+tablas de usuario modificables permanecen en cero. No se modificaron permisos
+runtime, firewall, tablas/datos ni Production. SQL serverless requirio reintentos
+por 40613 durante Resuming; no se interpreto como fallo de autorizacion.
+
+El perfil remoto y la prueba LocalDB solo permiten ese SELECT de objeto
+adicional, sin grant option ni columnas individuales. **37/37 pruebas locales**
+correctas, incluida publicacion del DACPAC en base LocalDB descartable,
+rechazo del perfil sin SELECT de dependencias y rechazo de INSERT inesperado.
+
+Run [42299486643](https://github.com/leoperetti/authcraft-api/actions/runs/42299486643),
+commit `ef0c8e7`: validate correcto y login/perfil SQL actualizado correcto.
+**DeployReport sigue fallando** con `permission_denied`, mencion SELECT, sin
+codigo SQL ni objeto identificado. La correccion resuelve el SQL 229 reproducido,
+pero no acredita permisos DacFx suficientes. No se ejecutaron Script/Publish.
+Los diagnosticos previos 42276404271, 42277996142 y 42279276536 tampoco
+identificaron el objeto; no repetir ensayos basados solo en expresiones regulares
+ni conceder SELECT de base/db_datareader/db_owner por inferencia.
+
+El diagnostico publico conserva unicamente categorias, codigos, nombres fijos
+de permisos y nombres de objetos `sys` extraidos de una sentencia de denegacion
+estrictamente reconocida. No imprime salida nativa libre ni tokens.
+T033/T037 siguen pendientes: hace falta diagnostico privado mas completo para
+identificar el bloqueo restante antes de solicitar otra ampliacion.
