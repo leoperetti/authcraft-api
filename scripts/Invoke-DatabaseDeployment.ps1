@@ -109,6 +109,7 @@ function Invoke-SqlPackage {
                 [Regex]::IsMatch($diagnosticText, '(?i)\b' + [Regex]::Escape($_) + '\b')
             })
             $permissionChecks = [ordered]@{
+                sql_expression_dependencies_select_denied = '(?i)\bSELECT\b[^\r\n]*\bpermission\b[^\r\n]*\bdenied\b[^\r\n]*\bsql_expression_dependencies\b'
                 alter_database_denied = '(?i)(?:does not have permission|permission.*denied)[^\r\n]*\balter\b[^\r\n]*\bdatabase\b'
                 view_definition_denied = '(?i)(?:do not have|does not have|denied)[^\r\n]*\bview definition\b|\bview definition\b[^\r\n]*\bdenied\b'
                 master_access_denied = '(?i)(?:permission|access)[^\r\n]*\bmaster\b|\bmaster\b[^\r\n]*(?:permission|access)'

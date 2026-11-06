@@ -70,7 +70,7 @@ public sealed class StagingPublisherVerificationTests
                     throw 'Modification must never be attempted'
                 }
                 if ($env:AUTHCRAFT_WRAPPER_SCENARIO -eq 'evaluate-failure') {
-                    Write-Output 'Error SQL72014: VIEW DATABASE STATE permission denied; The user does not have permission to alter the database. sensitive-native-diagnostic synthetic.test.token'
+                    Write-Output 'Error SQL72014: VIEW DATABASE STATE permission denied; The user does not have permission to alter the database. SELECT permission was denied on the object sql_expression_dependencies. sensitive-native-diagnostic synthetic.test.token'
                     exit 1
                 }
                 if ($action -eq '/Action:DeployReport') {
@@ -205,8 +205,9 @@ public sealed class StagingPublisherVerificationTests
             {
                 Assert.Contains("diagnostic_category=database_state_permission", error, StringComparison.Ordinal);
                 Assert.Contains("diagnostic_codes=SQL72014", error, StringComparison.Ordinal);
-                Assert.Contains("mentioned_permissions=VIEW DATABASE STATE,ALTER", error, StringComparison.Ordinal);
-                Assert.Contains("permission_checks=alter_database_denied", error, StringComparison.Ordinal);
+                var compactError = string.Concat(error.Where(character => !char.IsWhiteSpace(character)));
+                Assert.Contains("mentioned_permissions=VIEWDATABASESTATE,ALTER,SELECT", compactError, StringComparison.Ordinal);
+                Assert.Contains("permission_checks=sql_expression_dependencies_select_denied,alter_database_denied", compactError, StringComparison.Ordinal);
             }
             Assert.DoesNotContain("Process environment was not restored", error, StringComparison.Ordinal);
             Assert.Empty(Directory.GetDirectories(directory, "authcraft-publisher-check-*"));
