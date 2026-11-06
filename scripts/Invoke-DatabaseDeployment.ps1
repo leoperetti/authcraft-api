@@ -85,17 +85,40 @@ function Invoke-SqlPackage {
         [string[]]$Arguments
     )
 
+    $script:sqlPackageFailure = 'diagnostic_category=unavailable'
+    $nativeOutput = $null
     try {
         if ([IO.Path]::GetExtension($Path) -ieq '.ps1') {
-            & powershell.exe -NoProfile -NonInteractive -File $Path @Arguments *> $null
+            $nativeOutput = & powershell.exe -NoProfile -NonInteractive -File $Path @Arguments 2>&1
         }
         else {
-            & $Path @Arguments *> $null
+            $nativeOutput = & $Path @Arguments 2>&1
         }
-        return $LASTEXITCODE
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $diagnosticText = $nativeOutput -join "`n"
+            $codes = @([Regex]::Matches($diagnosticText, '\bSQL[0-9]{5,6}\b') |
+                ForEach-Object { $_.Value } | Sort-Object -Unique)
+            $category = 'unclassified'
+            if ($diagnosticText -match '(?i)VIEW DATABASE (?:PERFORMANCE |SECURITY )?STATE') {
+                $category = 'database_state_permission'
+            } elseif ($diagnosticText -match '(?i)permission.*denied|does not have.*permission|insufficient.*permission') {
+                $category = 'permission_denied'
+            } elseif ($diagnosticText -match '(?i)login failed|authentication failed|token.*expired') {
+                $category = 'authentication'
+            } elseif ($diagnosticText -match '(?i)connection.*timeout|server was not found|database.*unavailable|firewall') {
+                $category = 'connectivity'
+            }
+            $script:sqlPackageFailure = "exit_code=$exitCode; diagnostic_category=$category; diagnostic_codes=$($codes -join ',')"
+        }
+        return $exitCode
     }
     catch {
         throw 'SqlPackage invocation failed. Inspect the target; no rollback was attempted. Command output is withheld to protect credentials.'
+    }
+    finally {
+        $nativeOutput = $null
+        $diagnosticText = $null
     }
 }
 
@@ -146,12 +169,12 @@ try {
     }
     $reportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$reportPath"))
     if ($reportExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
-        throw 'SqlPackage DeployReport failed. No database changes were made.'
+        throw "SqlPackage DeployReport failed. No database changes were made. $script:sqlPackageFailure"
     }
 
     $scriptExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Script') + $commonArguments + @("/DeployScriptPath:$scriptPath"))
     if ($scriptExitCode -ne 0 -or -not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-        throw 'SqlPackage Script failed. No database changes were made.'
+        throw "SqlPackage Script failed. No database changes were made. $script:sqlPackageFailure"
     }
 
     $reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -203,11 +226,11 @@ try {
     }
     $recheckReportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$recheckReportPath"))
     if ($recheckReportExitCode -ne 0 -or -not (Test-Path -LiteralPath $recheckReportPath -PathType Leaf)) {
-        throw 'SqlPackage DeployReport revalidation failed. Publication is blocked.'
+        throw "SqlPackage DeployReport revalidation failed. Publication is blocked. $script:sqlPackageFailure"
     }
     $recheckScriptExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Script') + $commonArguments + @("/DeployScriptPath:$recheckScriptPath"))
     if ($recheckScriptExitCode -ne 0 -or -not (Test-Path -LiteralPath $recheckScriptPath -PathType Leaf)) {
-        throw 'SqlPackage Script revalidation failed. Publication is blocked.'
+        throw "SqlPackage Script revalidation failed. Publication is blocked. $script:sqlPackageFailure"
     }
     if ((Get-FileHash -LiteralPath $DacpacPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $dacpacHash -or
         (Get-FileHash -LiteralPath $recheckReportPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $reportHash -or
@@ -224,7 +247,7 @@ try {
 
     $publishExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Publish') + $commonArguments)
     if ($publishExitCode -ne 0) {
-        throw 'SqlPackage Publish failed. Inspect the target; no rollback was attempted.'
+        throw "SqlPackage Publish failed. Inspect the target; no rollback was attempted. $script:sqlPackageFailure"
     }
 
     [pscustomobject]@{

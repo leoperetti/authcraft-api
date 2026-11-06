@@ -69,7 +69,10 @@ public sealed class StagingPublisherVerificationTests
                 if ($action -notin @('/Action:DeployReport', '/Action:Script')) {
                     throw 'Modification must never be attempted'
                 }
-                if ($env:AUTHCRAFT_WRAPPER_SCENARIO -eq 'evaluate-failure') { exit 1 }
+                if ($env:AUTHCRAFT_WRAPPER_SCENARIO -eq 'evaluate-failure') {
+                    Write-Output 'Error SQL72014: VIEW DATABASE STATE permission denied; sensitive-native-diagnostic synthetic.test.token'
+                    exit 1
+                }
                 if ($action -eq '/Action:DeployReport') {
                     $path = @($args | Where-Object { $_ -like '/OutputPath:*' })[0].Substring('/OutputPath:'.Length)
                     [IO.File]::WriteAllText($path, '<DeployReport />')
@@ -197,6 +200,12 @@ public sealed class StagingPublisherVerificationTests
             var error = await errorTask;
             Assert.Equal(succeeds, process.ExitCode == 0);
             Assert.DoesNotContain("sensitive-native-diagnostic", output + error, StringComparison.Ordinal);
+            Assert.DoesNotContain("synthetic.test.token", error, StringComparison.Ordinal);
+            if (scenario == "evaluate-failure")
+            {
+                Assert.Contains("diagnostic_category=database_state_permission", error, StringComparison.Ordinal);
+                Assert.Contains("diagnostic_codes=SQL72014", error, StringComparison.Ordinal);
+            }
             Assert.DoesNotContain("Process environment was not restored", error, StringComparison.Ordinal);
             Assert.Empty(Directory.GetDirectories(directory, "authcraft-publisher-check-*"));
             if (succeeds)
