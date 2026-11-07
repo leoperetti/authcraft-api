@@ -183,18 +183,18 @@ y genera DeployReport/Script con el mismo token, DACPAC/manifiesto del run y opc
 seguras. No requiere activar ambos inputs. Guarda reporte/script por 30 días en
 `staging-schema-review` solo tras éxito; nunca ejecuta Publish ni postdeploy.
 Si falta SqlPackage o permisos, bloquea sin instalar, ampliar grants ni cambiar red.
-Esta ampliación ya se subió/ejecutó con autorización: el run
+Esta ampliacion ya se subio/ejecuto con autorizacion: el run
 [42269089780](https://github.com/leoperetti/authcraft-api/actions/runs/42269089780)
-pasó login, pero DeployReport falló con `diagnostic_category=permission_denied`.
-No hay plan aprobado ni permisos DacFx suficientes acreditados. El error no
-identifica el grant faltante; no ampliar permisos por inferencia.
-Posteriormente se verifico SQL 229 al consultar `sys.sql_expression_dependencies`
-con impersonacion del publicador. Con autorizacion explicita se concedio SELECT
-solo sobre esa vista: consulta exitosa y sin DDL/DML ni acceso a datos de negocio.
-El run [42299486643](https://github.com/leoperetti/authcraft-api/actions/runs/42299486643)
-paso login/perfil actualizado, pero DeployReport sigue fallando con una mencion
-de SELECT sin objeto identificable. Este grant no resolvio por completo DacFx.
-No conceder SELECT de base, db_datareader ni db_owner para sortear el bloqueo.
+paso login, pero DeployReport fallo con `diagnostic_category=permission_denied`.
+Se habilito diagnostico cifrado opt-in para investigar el bloqueo sin exponer
+salida nativa en logs publicos. El diagnostico privado identifico SELECT denegado
+en `dbo.__RefactorLog`. Con autorizacion explicita se concedio SELECT solo sobre
+`sys.sql_expression_dependencies` y `dbo.__RefactorLog`, validado con impersonacion:
+ambas consultas pasan y DDL/DML/lectura de negocio siguen denegados.
+Run [42386493432](https://github.com/leoperetti/authcraft-api/actions/runs/42386493432):
+`validate` y `verify-staging-publisher` en success; DeployReport/Script de
+solo lectura completados con OIDC real y evidencia `staging-schema-review`.
+No se ejecuto Publish ni postdeploy.
 
 Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
 y retirar rutas production, publicar un commit main desde el único flujo vigente.

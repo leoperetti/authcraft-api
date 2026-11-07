@@ -543,7 +543,7 @@ se verifico independientemente en Actions.
 [Microsoft documenta](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-sql-expression-dependencies-transact-sql#permissions)
 VIEW DEFINITION de base y SELECT sobre esa vista como requisitos de lectura.
 
-Tras la aprobacion explicita **Aplicar y verificar**, se aplico exclusivamente:
+Tras la aprobacion explicita **Aplicar y verificar**, se aplico:
 
 ```sql
 GRANT SELECT ON OBJECT::sys.sql_expression_dependencies
@@ -564,16 +564,29 @@ correctas, incluida publicacion del DACPAC en base LocalDB descartable,
 rechazo del perfil sin SELECT de dependencias y rechazo de INSERT inesperado.
 
 Run [42299486643](https://github.com/leoperetti/authcraft-api/actions/runs/42299486643),
-commit `ef0c8e7`: validate correcto y login/perfil SQL actualizado correcto.
-**DeployReport sigue fallando** con `permission_denied`, mencion SELECT, sin
-codigo SQL ni objeto identificado. La correccion resuelve el SQL 229 reproducido,
-pero no acredita permisos DacFx suficientes. No se ejecutaron Script/Publish.
-Los diagnosticos previos 42276404271, 42277996142 y 42279276536 tampoco
-identificaron el objeto; no repetir ensayos basados solo en expresiones regulares
-ni conceder SELECT de base/db_datareader/db_owner por inferencia.
+commit `ef0c8e7`: validate correcto y login/perfil SQL actualizado correcto, pero
+DeployReport continuo fallando con `permission_denied` y mencion de SELECT sin
+objeto identificable en diagnostico publico.
+
+Con autorizacion posterior se activo diagnostico cifrado opt-in (RSA-OAEP; llave
+privada local, artefacto retencion 1 dia) y se identifico el objeto exacto:
+`dbo.__RefactorLog`. Se concedio el segundo permiso minimo:
+
+```sql
+GRANT SELECT ON OBJECT::dbo.__RefactorLog
+TO [authcraft-staging-schema-publisher];
+```
+
+Validacion independiente: `can_read_dependencies=1`, `can_read_refactorlog=1`,
+ambas consultas en cero error y DDL/DML/lectura negocio siguen en cero.
+Run [42386493432](https://github.com/leoperetti/authcraft-api/actions/runs/42386493432),
+commit `a7a0fcb`: jobs `validate` y `verify-staging-publisher` en success; se
+generaron DeployReport/Script de solo lectura (`staging-schema-review`) sin
+Publish, sin postdeploy y sin cambios en Production.
 
 El diagnostico publico conserva unicamente categorias, codigos, nombres fijos
 de permisos y nombres de objetos `sys` extraidos de una sentencia de denegacion
 estrictamente reconocida. No imprime salida nativa libre ni tokens.
-T033/T037 siguen pendientes: hace falta diagnostico privado mas completo para
-identificar el bloqueo restante antes de solicitar otra ampliacion.
+Con el desbloqueo de Evaluate, T037 avanza en verificacion OIDC + evaluacion
+DacFx. Siguen pendientes los permisos minimos para **Publish** y su evidencia
+de revision (T033/T037), sin ampliar roles por anticipacion.

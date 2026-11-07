@@ -169,10 +169,12 @@ No agregar tablas para el modelo operativo de publicaciones.
   Correccion autorizada posterior: impersonacion del publicador reprodujo SQL 229
   al leer sys.sql_expression_dependencies. Grant SELECT limitado a esa vista,
   validado en LocalDB descartable y Staging (229 antes, consulta exitosa despues).
-  Se mantienen DDL/DML/lectura de negocio denegados, sin roles adicionales.
-  Run 42299486643, commit ef0c8e7: validate y login/perfil actualizado correctos;
-  DeployReport sigue bloqueado por permission_denied/SELECT sin objeto identificado.
-  El grant no completa T033/T037 ni autoriza publicacion.
+  Diagnostico cifrado opt-in identifico bloqueo restante en dbo.__RefactorLog;
+  se concedio SELECT solo sobre ese objeto, con verificacion independiente de
+  ambas lecturas y sin DDL/DML/lectura de negocio ni roles adicionales.
+  Run 42386493432, commit a7a0fcb: validate y verify-staging-publisher success,
+  DeployReport/Script de solo lectura completados. T037 avanza; Publish sigue
+  pendiente de evidencia de revision y permisos minimos especificos.
 
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 - [ ] T039 [US3] Implementar registro en el resumen/artefacto protegido de `.github\workflows\main_authcraft-api.yml` de DeploymentAttempt con "`result`: pending | blocked | failed | succeeded.", timestamps, versión/destino y resultados preflight/esquema/API/salud/autenticación; CandidateRelease con "`state`: built | staging_failed | staging_validated | awaiting_approval | production_blocked | approved | production_failed | published.", marcando production_blocked tras staging sin aprobación disponible y sin sugerir que production fue publicado; verificar estados con ejecuciones simuladas antes de activar el workflow.
