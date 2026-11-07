@@ -119,11 +119,23 @@ public sealed class LocalEnvironmentSqlTests
         {
             Assert.True(await reader.ReadAsync());
             Assert.Equal(0, reader.GetInt32(reader.GetOrdinal("can_read_dependencies")));
+            Assert.Equal(0, reader.GetInt32(reader.GetOrdinal("can_read_refactorlog")));
             Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StagingPublisherSqlTests.AssertReviewPermissions(reader));
         }
 
         command.CommandText = """
             GRANT SELECT ON OBJECT::sys.sql_expression_dependencies TO [authcraft_schema_review_test];
+            EXECUTE AS USER = N'authcraft_schema_review_test';
+            """ + "\n" + StagingPublisherSqlTests.ReviewPermissionQuery + "\nREVERT;";
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0, reader.GetInt32(reader.GetOrdinal("can_read_refactorlog")));
+            Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => StagingPublisherSqlTests.AssertReviewPermissions(reader));
+        }
+
+        command.CommandText = """
+            GRANT SELECT ON OBJECT::dbo.__RefactorLog TO [authcraft_schema_review_test];
             EXECUTE AS USER = N'authcraft_schema_review_test';
             """ + "\n" + StagingPublisherSqlTests.ReviewPermissionQuery + "\nREVERT;";
         await using (var reader = await command.ExecuteReaderAsync())
