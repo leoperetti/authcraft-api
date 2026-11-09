@@ -344,8 +344,8 @@ compatibilidad, confianza final ni recuperacion del estado parcial. Implementaci
 local y ensayos del diseno revisado verificados con SqlPackage 170.4.53.0 y
 170.5.96.0. DeploymentAttempt integrado localmente con prueba ejecutada por el
 runner, version/hash de herramienta/fuentes, SQL/TRX y estados conservadores;
-evaluacion y revision remotas pendientes.
-No hay autorizacion remota.
+evaluacion review-only remota verificada en el run 42705333969.
+Revision autenticada y autorizacion de Publish pendientes.
 
 Pruebas de configuración, JWT cruzado, secretos faltantes, salud, manifiesto,
 referencia no autorizada y release superado. Prueba local con DACPAC real y las
@@ -372,5 +372,5 @@ y autorización; nunca restaurar encima de datos actuales automáticamente.
 - No completar la feature con solo development/staging: FR-012 y SC-003 siguen pendientes.
 - Revision post-diseno: principios I-IX satisfechos por el diseno, sin excepciones.
   La implementacion local por fases, DeploymentAttempt y sus ensayos pasan;
-  generar nueva evidencia del runner y obtener revision exacta siguen como gates
-  pendientes. No hay promesa de atomicidad global ni autorizacion de Publish.
+  evidencia del runner verificada en 42705333969. Obtener revision exacta sigue
+  pendiente. No hay promesa de atomicidad global ni autorizacion de Publish.

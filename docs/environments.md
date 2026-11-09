@@ -1339,3 +1339,94 @@ Staging de evaluacion esta active. Esta autorizacion no es revision del SQL nuev
 La evaluacion conservara ademas `evaluation-toolchain.json` con version/hash del
 SqlPackage, commit/run y opciones, para comprobar el alcance de la herramienta
 exacta del runner sin inferir su version del encabezado del script.
+
+### Evaluacion review-only nueva: 42705333969
+
+Se hizo commit/push autorizado de
+`ceaa5258111e266cbebaacf733869f4e9ad3cd47` y dispatch exclusivo de
+`main_authcraft-api-staging.yml`, con verify_staging_publisher=true,
+evaluate_staging_schema=true, baseline unknown y bootstrap inicial explicito.
+El [run 42705333969](https://github.com/leoperetti/authcraft-api/actions/runs/42705333969)
+finalizo success en validate, verify-staging-publisher y preflight-staging.
+El workflow legacy Production seguia disabled_manually despues de la evaluacion.
+
+Validate aprobo 176 pruebas y omitio las dos de LocalDB porque ese job no configura
+conexion local. Ambas ya fueron ejecutadas sin omision en la seleccion local de
+121 pruebas; no se presenta la omision como ensayo del motor ni como rollback
+acreditado por Actions. El wrapper OIDC exige una prueba SQL de permisos ejecutada
+y aprobada, y devolvio deployment_authorized=false. El preflight verifico procedencia
+y gates live bajo bootstrap inicial; no acredita una baseline desplegada.
+Se observaron advertencias preexistentes de nullability/CS0108 y de Node 20 en
+actions, sin fallos. No se modificaron asuntos ajenos a esta feature.
+
+Los cuatro artefactos originales (api, dacpac, release-manifest,
+staging-schema-review) pertenecen al run y commit anteriores y estaban no
+expirados al descargarlos. Se comprobo el manifiesto y hashes contra los paquetes:
+
+| Evidencia | SHA256 |
+|-----------|--------|
+| API ZIP | `89e38b4efddfda267c438679a7a543b6123bb9ab66e86a9ab2e0ab1924ff6117` |
+| DACPAC | `68e93438772747b42379324d8f0fa33f54a11d8627c131f8a78300ee9c60bfe8` |
+| DeployReport | `a01e0e92a079f14ddab1a4a9c39d16b2db235374852cb6cb42314f8f5da31b64` |
+| SQL original | `778fb7f1c40b85bc824356c486c0ae1577b83a5aed355386ce8ef8ae4bc7b68d` |
+| evaluation-toolchain.json | `10bcad872b88c97a8bb8b0079458d75787fc825e9ff7f5fb76a8912aa7971477` |
+
+Toolchain original: SqlPackage 170.4.53.0, ejecutable SHA256
+`907454a8848e9617666ac03db8c18e82a15e0435aaa223d8d132f830a7841d26`,
+include_transactional_scripts=true y script_database_options=false.
+Version y hash del ejecutable coinciden con el ensayo real LocalDB de fases.
+
+El SQL original descargado paso el gate del publicador local sin editarlo ni
+ejecutarlo contra SQL. Limites observados (lineas del archivo original):
+
+- Esquema DacFx: XACT_ABORT 44, BEGIN 48 y COMMIT 252. Los BEGIN internos de
+  recuperacion condicional DacFx no son la transaccion propia del postdeploy.
+- Postdeploy: guard de entrada 51001 en 271, XACT_ABORT 273, BEGIN 275,
+  semillas 279/281/283, siete WITH CHECK CHECK 285–291, THROW 51000 en 307,
+  COMMIT 311, rollback condicional en 315 y rethrow 316.
+- El COMMIT del esquema precede a la fase protegida tal como admite el diseno.
+  No hay COMMIT prematuro dentro del postdeploy. El resultado demuestra forma
+  por fases compatible con el ensayo, no estado de rollback en Azure.
+- El reporte no contiene Drop; conserva los dos status checks equivalentes.
+  Persisten cinco WAITFOR atribuibles al comportamiento DacFx ya reproducido;
+  no se insertaron ni eliminaron manualmente ni se atribuye una finalidad interna
+  no demostrada. Siguen sujetos a revision del responsable.
+
+La evidencia original y logs sanitizados quedan en la carpeta privada de sesion
+`files/staging-release-42705333969`, ademas de los artefactos del run.
+El DeployReport conserva el mismo hash de evaluaciones anteriores porque la
+extension cambia el postdeploy y opciones, no esas operaciones de modelo;
+eso no hace intercambiables SQL, DACPAC ni revisiones de runs anteriores.
+
+T069 completada. T070 pendiente: #11 no tiene comentario de leoperetti para el
+nuevo run al verificarlo. La plantilla siguiente no es una aprobacion: el revisor
+debe descargar/inspeccionar el SQL, reporte, paquetes y recuperacion, decidir los
+campos pending y publicar personalmente su comentario autenticado. No se escribio
+aprobacion en su nombre. No hubo SQL Publish, despliegue API, cambios de permisos
+ni operaciones sobre Production.
+
+```text
+deployment_review=pending
+run_id=42705333969
+commit_sha=ceaa5258111e266cbebaacf733869f4e9ad3cd47
+staging_baseline_sha=unknown
+target_environment=staging
+database_server=authcraftdbbrasil.database.windows.net
+database_name=authcraft-db-staging
+dacpac_sha256=68e93438772747b42379324d8f0fa33f54a11d8627c131f8a78300ee9c60bfe8
+api_compatibility=pending
+data_impact=pending
+recovery_plan=pending
+block_on_possible_data_loss=true
+drop_objects_not_in_source=false
+script_database_options=false
+include_transactional_scripts=true
+postdeploy_transaction=true
+deploy_report_sha256=a01e0e92a079f14ddab1a4a9c39d16b2db235374852cb6cb42314f8f5da31b64
+deploy_script_sha256=778fb7f1c40b85bc824356c486c0ae1577b83a5aed355386ce8ef8ae4bc7b68d
+```
+
+pending bloquea el parser deliberadamente. Si el responsable aprueba, debe
+decidir deployment_review=approved y las tres aceptaciones accepted; una decision
+negativa, datos distintos o campos duplicados bloquean. Incluso una revision
+valida no autoriza automaticamente permisos temporales, Publish ni despliegue API.

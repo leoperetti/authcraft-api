@@ -574,12 +574,21 @@ acepta el SQL real conocido solo cuando satisface el contrato.
 - [X] T066 [US3] Argumentos comunes del publicador y parser autenticado exigen ambas opciones; fixtures de review/pipeline/recuperacion actualizados sin aceptar revisiones anteriores ni alterar artefactos generados.
 - [X] T067 [US3] Gate exige el postdeploy versionado completo con su inclusion expandida conservando salto final y UTF8. Rechaza COMMIT prematuro dentro del postdeploy, transaccion ausente, validacion modificada/fuera de cobertura y escrituras posteriores. Admite COMMIT de esquema anterior a esa fase y solo cola DacFx conocida. Probar mocks negativos y SQL original generado realmente contra LocalDB despues de publicar el DACPAC, sin Publish remoto.
 - [X] T068 [US3] Extender DeploymentAttempt en la ruta de reanudacion y el publicador: opciones verificadas, transaction_scope, postdeploy_result, failure_state_verification y referencia de SQL/hash/herramienta/limites/ensayos. Exigir TRX de la prueba exacta ejecutada/aprobada, seis escenarios y coincidencia de versiones/hashes de herramienta, fuentes y SQL antes de Publish. Guardar instantanea pending y resultado final sanitizado, preservar JSON/TRX/SQL en artefacto por run durante 30 dias, sin inferir rolled_back/unchanged/committed. Solo registro/upload usan always(); SQL/API/smoke conservan gates. Validado con prueba LocalDB real mas 120 regresiones (121 en total, cero omisiones), incluidos ocho escenarios del resumen y rechazos de evidencia insuficiente/alterada. No se activo ni ejecuto remoto; T039 y T069/T070 siguen pendientes.
-- [ ] T069 [US3] Solo con nueva autorizacion de commit/push/dispatch y conexion SQL, generar mediante `.github\workflows\main_authcraft-api-staging.yml` un candidato con la opcion implementada, ejecutar exclusivamente DeployReport/Script/OIDC/preflight y registrar en `docs\environments.md` herramientas, limites transaccionales y hashes exactos; comprobar procedencia/manifiesto y el gate sobre el SQL original del runner sin Publish. No reutilizar el run 42692449745 ni sus hashes/revision y detenerse si difiere la cobertura probada localmente.
+- [X] T069 [US3] Solo con nueva autorizacion de commit/push/dispatch y conexion SQL, generar mediante `.github\workflows\main_authcraft-api-staging.yml` un candidato con la opcion implementada, ejecutar exclusivamente DeployReport/Script/OIDC/preflight y registrar en `docs\environments.md` herramientas, limites transaccionales y hashes exactos; comprobar procedencia/manifiesto y el gate sobre el SQL original del runner sin Publish. No reutilizar el run 42692449745 ni sus hashes/revision y detenerse si difiere la cobertura probada localmente.
   Autorizacion recibida el 2026-11-09: commit/push y evaluacion review-only de
   Staging, incluida conexion SQL y su posible consumo. No autoriza Publish,
   despliegue API, cambios de permisos ni operaciones sobre Production.
   Production workflow confirmado disabled_manually antes del push.
+  Resultado: commit ceaa5258111e266cbebaacf733869f4e9ad3cd47 subido; run
+  42705333969 successful en validate/verify-staging-publisher/preflight-staging.
+  Cuatro artefactos originales no expirados; manifiesto/hashes verificados.
+  SqlPackage 170.4.53.0 y hash del ejecutable coinciden con el ensayo LocalDB;
+  SQL original pasa el gate exacto. Esquema BEGIN 48/COMMIT 252; postdeploy BEGIN
+  275/guard 307/COMMIT 311/CATCH rollback 315. Sin Publish ni cambios de permisos.
 - [ ] T070 [US3] Tras T069, registrar nueva evidencia remota y solicitar revision autenticada del candidato con `include_transactional_scripts=true` y `postdeploy_transaction=true`, sin escribir aprobacion en nombre del responsable. La documentacion local no satisface esta revision remota. Mantener T033/T040 bloqueadas hasta revision exacta, cobertura por fases requerida, permisos/revocacion y autorizaciones operacionales satisfechos.
+  Evidencia y plantilla sin aprobar actualizadas para 42705333969. Consulta de #11:
+  cero comentarios de leoperetti que mencionen ese nuevo run. Falta su revision
+  manual autenticada; no se escribio ni se aprobo ningun comentario en su nombre.
 
 ### US4 - Recuperacion sin suponer rollback global (P2)
 
@@ -594,7 +603,8 @@ parcial/desconocido y nunca continúan API/promocion ni disparan rollback destru
 - [X] T072 Verificar plan/contrato/quickstart contra la implementacion local; ejecutar build API/tests Release, MSBuild/SSDT del DACPAC (0 errores/advertencias) y seleccion LocalEnvironmentSqlTests/DatabaseDeploymentReviewTests/DeploymentRecoveryTests/DeploymentPipelineTests/StagingPublisherVerificationTests con LocalDB habilitado. Resultado final: 101 pruebas aprobadas, ninguna omitida; ensayo anterior con 170.5.96.0: 99 aprobadas. Registrar evidencia, limitacion por fases y pendientes T068–T070 en `docs\environments.md`; comprobar diff sin declarar completa la feature ni autorizar remoto.
   Actualizacion T068: 121 pruebas aprobadas sin omisiones (1 ensayo exacto de
   fases con seis casos y TRX validado, mas 120 regresiones). T068 cerrado localmente;
-  T069/T070 siguen bloqueados por autorizacion/evidencia/revision remotas.
+  posteriormente T069 completada con autorizacion y evidencia del run 42705333969;
+  T070 sigue pendiente de revision autenticada del responsable.
 
 **MVP del incremento**: T062–T064, evidencia local del alcance real. No avanzar a
 publicacion si falla ese gate, aunque la opcion este activada. US1 no requiere

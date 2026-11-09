@@ -26,7 +26,13 @@ El diseno esta implementado y verificado localmente con SqlPackage 170.4.53.0 y
 real, gate sobre SQL generado y rechazo de transaccion ajena con 51001 antes de
 escribir. T068 agrega evidencia de DeploymentAttempt y pruebas del resumen de
 Actions; la nueva seleccion local suma 121 pruebas aprobadas sin omisiones.
-T069–T070 (evidencia y revision remotas) siguen pendientes.
+T069 completada con el run review-only
+[42705333969](https://github.com/leoperetti/authcraft-api/actions/runs/42705333969),
+commit `ceaa5258111e266cbebaacf733869f4e9ad3cd47`: los tres jobs pasan,
+paquetes/manifiesto verificados y SQL original aceptado por el gate local.
+SqlPackage 170.4.53.0 y hash del ejecutable coinciden con los ensayos locales.
+No se publico SQL/API ni se cambiaron permisos. T070 (revision autenticada) sigue
+pendiente; ver [hashes y plantilla sin aprobar](../../docs/environments.md#evaluacion-review-only-nueva-42705333969).
 Este procedimiento no ejecuta ni autoriza Publish en Azure.
 
 1. Construir el DACPAC con el comando MSBuild de esta guia. Verificar que ambos
@@ -57,6 +63,13 @@ Este procedimiento no ejecuta ni autoriza Publish en Azure.
    `postdeploy_transaction=true` y hashes
    nuevos. El run `42692449745` y sus revisiones previas no acreditan esta opcion.
    Hasta completar estos gates, no ejecutar el workflow de reanudacion.
+
+Para el candidato actual, revisar personalmente los artefactos del run 42705333969
+y publicar la decision autenticada en #11 segun la plantilla de ambientes.
+Los campos pending de esa plantilla bloquean deliberadamente: no convertirlos
+en approved/accepted sin completar la revision. No reutilizar comentarios de
+runs anteriores. Aun despues de revisar faltan autorizacion operativa y permisos
+de publicacion/revocacion verificados; este quickstart no concede ninguno.
 
 La reanudacion ahora ejecuta la prueba exacta de fases en LocalDB antes de OIDC,
 con el mismo SqlPackage que usara para publicar. Conserva seis SQL sinteticos,
@@ -348,9 +361,11 @@ valida explicitamente las siete constraints revisadas al cerrar el postdeploy.
 El ensayo LocalDB publico el DACPAC, rechazo datos invalidos al validar y comprobo
 confianza final. La evaluacion remota fue solo DeployReport/Script y el SQL paso
 el gate local; no es una aprobacion de publicacion.
-El nuevo script no contiene WAITFOR. Los hashes estan en el
+El script del ensayo local no contenia WAITFOR; la evaluacion actual del runner
+conserva cinco instrucciones atribuibles al comportamiento DacFx reproducido.
+No confundir ambos archivos ni editar el SQL original. Los hashes estan en el
 [registro de ambientes](../../docs/environments.md#correccion-versionada-y-ensayo-local-verificado).
-Crear un nuevo release con estos cambios: `42669270551` no contiene la correccion.
+Usar el candidato actual `42705333969`: `42669270551` no contiene la correccion.
 
 La revision SQL debe estar en una issue abierta de `leoperetti/authcraft-api`,
 como comentario de `leoperetti`, con exactamente una linea por campo del
@@ -371,8 +386,8 @@ entonces intenta SQL Publish; despues despliega el ZIP de ese mismo run y ejecut
 smoke. No reconstruye, no concede permisos automaticamente y no hace rollback
 destructivo. Antes de poder ejecutarla:
 
-- deben subirse los cambios y generarse un nuevo release; debe existir en la issue
-  #11 una revision autenticada que identifique ese nuevo run, commit, destino,
+- para el candidato `42705333969`, debe existir en la issue
+  #11 una revision autenticada que identifique ese run, commit, destino,
   baseline verificado o `unknown` inicial, opciones y sus cuatro hashes exactos,
   con aceptaciones explicitas de compatibilidad API, impacto de datos y recuperacion.
   No reutilizar la revision ni el DACPAC de `42669270551`;
