@@ -415,6 +415,10 @@ No agregar tablas para el modelo operativo de publicaciones.
   ejecutar la ruta en GitHub con gates disponibles y verificar los casos de
   autorizacion/permiso reales; T038 permanece pendiente.
 - [ ] T039 [US3] Implementar registro en el resumen/artefacto protegido de `.github\workflows\main_authcraft-api-staging.yml` de DeploymentAttempt con "`result`: pending | blocked | failed | succeeded.", timestamps, versión/destino y resultados preflight/esquema/API/salud/autenticación; CandidateRelease con "`state`: built | staging_failed | staging_validated | awaiting_approval | production_blocked | approved | production_failed | published.", marcando production_blocked tras staging sin aprobación disponible y sin sugerir que production fue publicado; verificar estados con ejecuciones simuladas antes de activar el workflow.
+  Avance local T068: la ruta de reanudacion conserva intento SQL y resumen agregado
+  con etapas/tiempos/evidencia de transaccion, y ocho simulaciones de resultados pasan.
+  T039 no se completa: faltan integrar el ciclo CandidateRelease y verificar la ruta
+  remota; el artefacto con acceso del repositorio no constituye aprobacion protegida.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
@@ -515,6 +519,89 @@ Entra reales. No completar estas tareas solo por pasar las pruebas simuladas.
 
 ---
 
+## Incremento 2026-11-09: cobertura transaccional (antes de publicar)
+
+**Revision de requisitos posterior al ensayo T062**: el usuario autorizo revisar
+el diseno para admitir fases separadas, con postdeploy transaccional y recuperacion
+explicita del esquema parcial. El plan/contrato/modelo/quickstart ya reflejan esta
+decision; los criterios originales de T062–T072 de baseline global intacta,
+schema_and_postdeploy y rechazo de todo COMMIT anterior al postdeploy quedan
+superados, no satisfechos. Conservar T062 y sus fallos como evidencia historica.
+El desglose vigente usa escenarios
+separados: control sin proteccion y postdeploy protegido; transaccion versionada
+para semillas/validaciones; revision `postdeploy_transaction=true`; estados
+separate_schema_and_postdeploy y postdeploy_result; gate del COMMIT dentro de la
+fase; recuperacion de esquema parcial. No borrar el ensayo ni cambiar su resultado
+para aparentar atomicidad global. La implementacion local posterior consta abajo;
+esta revision no autoriza publicaciones.
+
+Conservar T001–T061 y sus estados/evidencias; los IDs nuevos no reinician ni
+renumeran trabajo anterior. Este incremento implementa la actualizacion de plan,
+research, modelo, contrato y quickstart del 2026-11-09. No autoriza commit/push,
+dispatch, conexiones Azure ni Publish remoto. Los ensayos locales usan bases
+descartables; no modificar la base development existente.
+
+### US2 - Preparacion local transaccional (P1)
+
+**Goal**: exigir la opcion explicita y medir su alcance antes de asumir atomicidad.
+**Independent Test**: baseline/delta en LocalDB mediante SqlPackage real; exito con
+constraints confiables y fallos 547/51000 con estado posterior inspeccionado desde
+otra conexion. Una ejecucion omitida no satisface el criterio.
+
+- [X] T062 [US2] Ampliar primero `authcraft-api.Tests\LocalEnvironmentSqlTests.cs` con baseline/delta sinteticos y casos independientes de Publish exitoso, fallo 547 al validar datos existentes y THROW 51000 en postdeploy de un fixture aislado; construir fixtures DACPAC sin alterar el SQL generado ni el guard de produccion. Comparar desde otra conexion columnas, constraints/estado de confianza, semillas y datos previos, conservar evidencia sanitizada y eliminar solo bases/archivos propios en finally. Registrar el comportamiento actual y exigir baseline intacta en ambos fallos para acreditar atomicidad, no solo exit code no cero.
+
+  Resultado T062 historico (antes de revisar el diseno): test de gate implementado y ejecutado con SqlPackage
+  170.4.53.0 y 170.5.96.0. El camino exitoso pasa, pero el criterio de atomicidad
+  falla en ambos errores: COMMIT linea 117 antes del postdeploy linea 124.
+  SQL 547 deja columna/check/semilla y check no confiable; SQL 51000 deja
+  columna/check/semilla con check confiable. La fila baseline permanece.
+  T062 marca la implementacion del test, no una prueba aprobada de atomicidad.
+  T064 queda bloqueada y se detiene el incremento para revisar el diseno.
+  La opcion True se paso solo a fixtures locales; T063/T066 siguen sin implementar.
+  No se omitio ni debilito el test que falla. Evidencia en docs/environments.md.
+- [X] T063 [US2] Agregar `/p:IncludeTransactionalScripts=True` y `/p:ScriptDatabaseOptions=False` al conjunto compartido de `scripts\Initialize-LocalEnvironment.ps1` usado por DeployReport, Script y Publish. Versionar en `authcraft-db\postdeploys\Script.PostDeployment.sql` una transaccion propia para semillas/validaciones, entrada @@TRANCOUNT=0, XACT_ABORT y rollback/rethrow. Verificar los argumentos de las siete invocaciones reales del inicializador, sin bypass ni cambios al SQL generado.
+- [X] T064 [US2] Ejecutar control sin proteccion y postdeploy protegido con build SQL y SqlPackage real; registrar herramienta, limites, XACT_ABORT y estados desde otra conexion. Exigir rollback de semilla/trust del postdeploy ante 547/51000 y conservacion de datos previos; admitir esquema DacFx parcial segun decision autorizada, nunca llamarlo atomicidad global. Probar tambien rechazo 51001 de transaccion ajena antes de escribir. Resultado local verificado con 170.4.53.0 y 170.5.96.0.
+
+### US3 - Publicador y revision exacta transaccional (P1)
+
+**Goal**: opciones identicas, revision invalidada por cambios y gate compatible
+solo con los limites transaccionales identificados y probados.
+**Independent Test**: harness sin Azure rechaza opcion ausente/falsa/duplicada,
+deriva, COMMIT anticipado, validacion fuera de cobertura y SQL posterior arbitrario;
+acepta el SQL real conocido solo cuando satisface el contrato.
+
+- [X] T065 [P] [US3] Regresiones del publicador exigen IncludeTransactionalScripts=True en todas las acciones y exactamente un campo autenticado de cada uno: `include_transactional_scripts=true` y `postdeploy_transaction=true`. Ausencia, False y duplicacion bloquean sin Publish; conservar pruebas de revision antigua/revocada y deriva. Probar tambien cleanup DacFx #tmpErrors con CRLF sin aceptar tablas permanentes u otros temporales.
+- [X] T066 [US3] Argumentos comunes del publicador y parser autenticado exigen ambas opciones; fixtures de review/pipeline/recuperacion actualizados sin aceptar revisiones anteriores ni alterar artefactos generados.
+- [X] T067 [US3] Gate exige el postdeploy versionado completo con su inclusion expandida conservando salto final y UTF8. Rechaza COMMIT prematuro dentro del postdeploy, transaccion ausente, validacion modificada/fuera de cobertura y escrituras posteriores. Admite COMMIT de esquema anterior a esa fase y solo cola DacFx conocida. Probar mocks negativos y SQL original generado realmente contra LocalDB despues de publicar el DACPAC, sin Publish remoto.
+- [X] T068 [US3] Extender DeploymentAttempt en la ruta de reanudacion y el publicador: opciones verificadas, transaction_scope, postdeploy_result, failure_state_verification y referencia de SQL/hash/herramienta/limites/ensayos. Exigir TRX de la prueba exacta ejecutada/aprobada, seis escenarios y coincidencia de versiones/hashes de herramienta, fuentes y SQL antes de Publish. Guardar instantanea pending y resultado final sanitizado, preservar JSON/TRX/SQL en artefacto por run durante 30 dias, sin inferir rolled_back/unchanged/committed. Solo registro/upload usan always(); SQL/API/smoke conservan gates. Validado con prueba LocalDB real mas 120 regresiones (121 en total, cero omisiones), incluidos ocho escenarios del resumen y rechazos de evidencia insuficiente/alterada. No se activo ni ejecuto remoto; T039 y T069/T070 siguen pendientes.
+- [ ] T069 [US3] Solo con nueva autorizacion de commit/push/dispatch y conexion SQL, generar mediante `.github\workflows\main_authcraft-api-staging.yml` un candidato con la opcion implementada, ejecutar exclusivamente DeployReport/Script/OIDC/preflight y registrar en `docs\environments.md` herramientas, limites transaccionales y hashes exactos; comprobar procedencia/manifiesto y el gate sobre el SQL original del runner sin Publish. No reutilizar el run 42692449745 ni sus hashes/revision y detenerse si difiere la cobertura probada localmente.
+  Autorizacion recibida el 2026-11-09: commit/push y evaluacion review-only de
+  Staging, incluida conexion SQL y su posible consumo. No autoriza Publish,
+  despliegue API, cambios de permisos ni operaciones sobre Production.
+  Production workflow confirmado disabled_manually antes del push.
+- [ ] T070 [US3] Tras T069, registrar nueva evidencia remota y solicitar revision autenticada del candidato con `include_transactional_scripts=true` y `postdeploy_transaction=true`, sin escribir aprobacion en nombre del responsable. La documentacion local no satisface esta revision remota. Mantener T033/T040 bloqueadas hasta revision exacta, cobertura por fases requerida, permisos/revocacion y autorizaciones operacionales satisfechos.
+
+### US4 - Recuperacion sin suponer rollback global (P2)
+
+**Goal**: distinguir fallo, cobertura y estado real sin restauraciones automaticas.
+**Independent Test**: los escenarios de recuperacion conservan evidencia de estado
+parcial/desconocido y nunca continúan API/promocion ni disparan rollback destructivo.
+
+- [X] T071 [US4] Actualizar pruebas de review/recuperacion y `docs\deployment-recovery.md`: fallos 547/51000 bloquean publicacion posterior y no restauran esquema ni exponen diagnosticos sensibles. Verificar que API/smoke conservan la condicion de exito implicita de Actions. Diferenciar rollback comprobado de postdeploy y esquema parcial/desconocido; exigir inspeccion desde otra conexion y no prometer transaccion conjunta SQL/API. Production no se modifica ni habilita.
+
+### Validacion transversal del incremento
+
+- [X] T072 Verificar plan/contrato/quickstart contra la implementacion local; ejecutar build API/tests Release, MSBuild/SSDT del DACPAC (0 errores/advertencias) y seleccion LocalEnvironmentSqlTests/DatabaseDeploymentReviewTests/DeploymentRecoveryTests/DeploymentPipelineTests/StagingPublisherVerificationTests con LocalDB habilitado. Resultado final: 101 pruebas aprobadas, ninguna omitida; ensayo anterior con 170.5.96.0: 99 aprobadas. Registrar evidencia, limitacion por fases y pendientes T068–T070 en `docs\environments.md`; comprobar diff sin declarar completa la feature ni autorizar remoto.
+  Actualizacion T068: 121 pruebas aprobadas sin omisiones (1 ensayo exacto de
+  fases con seis casos y TRX validado, mas 120 regresiones). T068 cerrado localmente;
+  T069/T070 siguen bloqueados por autorizacion/evidencia/revision remotas.
+
+**MVP del incremento**: T062–T064, evidencia local del alcance real. No avanzar a
+publicacion si falla ese gate, aunque la opcion este activada. US1 no requiere
+tareas nuevas; sus verificaciones de aislamiento existentes siguen pendientes.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -604,8 +691,35 @@ La tabla es la fuente de prerrequisitos reales; orden numérico por sí solo no 
 | T059 | T003, T044; documento de revisión fijo, separado de instrucciones Staging |
 | T060 | T058, T059; contrato de campos/códigos definido en pruebas y guía |
 | T061 | T050, T060; autorización y protección Production deben permanecer intactas |
+| T062 | T004, T022; fixture LocalDB aislado y herramientas existentes |
+| T063 | T062; pruebas primero |
+| T064 | T062, T063; resultado negativo bloquea dependientes hasta revisar diseno |
+| T065 | T004, T027; independiente de T062, archivos distintos |
+| T066 | T065 |
+| T067 | T064, T066 |
+| T068 | T067; implementar los campos de T039 sin esperar su cierre operacional, no completar por pruebas estaticas solamente |
+| T069 | T064, T067; nueva autorizacion commit/push/dispatch/conexion y evidencia review-only |
+| T070 | T069; responsable autorizado revisa candidato nuevo, no aprobacion fabricada |
+| T071 | T064, T066; ejecutar antes de publicacion aun si US4 remoto esta bloqueado |
+| T072 | T064, T067, T071; integrar T068–T070 cuando disponibles; registrar bloqueos, no completar por omision |
+
+Prerrequisitos adicionales de cierre: T033 requiere T067/T070; T035/T038 requieren
+T067/T068 y su verificacion integral; T040 requiere ademas T064/T068/T070/T071.
+Son gates de finalizacion/publicacion: no impiden escribir pruebas o codigo local
+de tareas parciales anteriores. T068 no depende del cierre de T039; aporta los
+campos transaccionales que se integraran en ese registro. Ningun gate autoriza
+por si solo una ejecucion remota.
 
 ### Parallel Opportunities
+
+- Incremento transaccional: T062 y T065 pueden escribirse en paralelo tras sus
+  prerrequisitos, porque usan archivos distintos. T063 espera T062 y T066 espera
+  T065. Luego T064 y T066 son independientes; T067 espera ambos resultados.
+- T071 y T068 pueden avanzar en archivos separados despues de sus respectivos
+  gates, sin ejecutar despliegues. Consolidar las guias secuencialmente.
+- Grafo del incremento: T062 -> T063 -> T064; T065 -> T066;
+  (T064,T066) -> T067 -> T069 -> T070; T067 -> T068;
+  (T064,T066) -> T071; (T064,T067,T071) -> T072.
 
 - T014/T015, T026/T027 y T042/T043 crean archivos distintos y solo requieren Foundations.
 - T058 y T059 pueden prepararse en paralelo después de Foundations porque crean archivos distintos; T060 espera T058 y T061 espera T050/T060.

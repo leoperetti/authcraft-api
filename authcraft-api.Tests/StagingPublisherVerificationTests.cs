@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace authcraft_api.Tests;
 
@@ -37,6 +38,10 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("Test-ReleasePreflight.ps1", diagnostic, StringComparison.Ordinal);
         Assert.Contains("staging-evaluation-*-report.xml", diagnostic, StringComparison.Ordinal);
         Assert.Contains("staging-evaluation-*-script.sql", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("evaluation-toolchain.json", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("sqlpackage_version", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("sqlpackage_sha256", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("-requires Microsoft.VisualStudio.Component.SQL.SSDT", diagnostic, StringComparison.Ordinal);
         Assert.Contains("allow_initial_staging_bootstrap", validation, StringComparison.Ordinal);
         Assert.Contains("last_successful_staging_commit_sha", validation, StringComparison.Ordinal);
         Assert.Contains("actions: read", validation, StringComparison.Ordinal);
@@ -91,6 +96,112 @@ public sealed class StagingPublisherVerificationTests
         Assert.True(databasePublish > preflight);
         Assert.True(apiDeploy > databasePublish);
         Assert.True(smoke > apiDeploy);
+        Assert.Contains("id: transaction-verification", workflow, StringComparison.Ordinal);
+        Assert.Contains("TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage", workflow, StringComparison.Ordinal);
+        Assert.Contains("AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY", workflow, StringComparison.Ordinal);
+        Assert.Contains("-TransactionVerificationPath", workflow, StringComparison.Ordinal);
+        Assert.Contains("-AttemptPath", workflow, StringComparison.Ordinal);
+        Assert.Contains("name: staging-deployment-attempt", workflow, StringComparison.Ordinal);
+        Assert.Contains("retention-days: 30", workflow, StringComparison.Ordinal);
+        Assert.Contains("if-no-files-found: error", workflow, StringComparison.Ordinal);
+        var summary = workflow.IndexOf("- name: Record Staging deployment attempt", StringComparison.Ordinal);
+        var upload = workflow.IndexOf("- name: Preserve Staging deployment evidence", StringComparison.Ordinal);
+        Assert.True(summary > smoke);
+        Assert.True(upload > summary);
+        Assert.Contains("if: always()", workflow[summary..upload], StringComparison.Ordinal);
+        Assert.Contains("if: always()", workflow[upload..], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("before-sql", "blocked", "unverified", "pending", "not_executed")]
+    [InlineData("review-blocked", "blocked", "unverified", "pending", "not_executed")]
+    [InlineData("sql-failed", "failed", "separate_schema_and_postdeploy", "unknown", "not_executed")]
+    [InlineData("sql-cancelled", "failed", "unverified", "unknown", "not_executed")]
+    [InlineData("sql-interrupted", "failed", "separate_schema_and_postdeploy", "unknown", "not_executed")]
+    [InlineData("api-failed", "failed", "separate_schema_and_postdeploy", "pending", "not_executed")]
+    [InlineData("smoke-failed", "failed", "separate_schema_and_postdeploy", "pending", "unknown")]
+    [InlineData("success", "succeeded", "separate_schema_and_postdeploy", "pending", "succeeded")]
+    public async Task StagingAttempt_PreservesEvidenceWithoutInferringRollbackOrSkippedSuccess(
+        string scenario, string result, string scope, string failureState, string healthResult)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"authcraft-attempt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var workflow = File.ReadAllText(Path.Combine(
+                FindRepositoryRoot(), ".github", "workflows", "deploy_authcraft-api-staging.yml")).ReplaceLineEndings("\n");
+            var summaryMatch = Regex.Match(workflow,
+                @"(?s)- name: Record Staging deployment attempt\n.*?        run: \|\n(?<body>.*?)\n      - name: Preserve Staging deployment evidence");
+            Assert.True(summaryMatch.Success);
+            var scriptPath = Path.Combine(directory, "attempt.ps1");
+            File.WriteAllText(scriptPath, string.Join("\n",
+                summaryMatch.Groups["body"].Value.Split('\n').Select(line => line.Length >= 10 ? line[10..] : line)));
+            var evidenceDirectory = Path.Combine(directory, "staging-deployment-evidence");
+            Directory.CreateDirectory(evidenceDirectory);
+            if (scenario is not ("before-sql" or "sql-cancelled"))
+            {
+                var sqlAttempt = new
+                {
+                    schema_version = 1,
+                    release_run_id = "12345",
+                    commit_sha = new string('a', 40),
+                    started_at = "2026-11-09T20:00:00Z",
+                    result = scenario == "review-blocked" ? "blocked" : scenario == "sql-failed" ? "failed" : scenario == "sql-interrupted" ? "pending" : "succeeded",
+                    schema_result = scenario == "review-blocked" ? "blocked" : scenario == "sql-failed" ? "failed" : "succeeded",
+                    include_transactional_scripts = true,
+                    postdeploy_transaction = true,
+                    transaction_scope = scope,
+                    postdeploy_result = scenario == "review-blocked" ? "pending" : "unknown",
+                    failure_state_verification = failureState
+                };
+                File.WriteAllText(Path.Combine(evidenceDirectory, "sql-attempt.json"), JsonSerializer.Serialize(sqlAttempt));
+            }
+            var processInfo = new ProcessStartInfo("powershell.exe")
+            {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+            };
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", scriptPath })
+                processInfo.ArgumentList.Add(argument);
+            processInfo.Environment["RUNNER_TEMP"] = directory;
+            processInfo.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(directory, "summary.txt");
+            processInfo.Environment["GITHUB_RUN_ID"] = "23456";
+            processInfo.Environment["RELEASE_RUN_ID"] = "12345";
+            processInfo.Environment["RELEASE_COMMIT_SHA"] = new string('a', 40);
+            processInfo.Environment["STARTED_AT"] = "2026-11-09T20:00:00Z";
+            processInfo.Environment["TRANSACTION_RESULT"] = scenario == "before-sql" ? "failure" : "success";
+            processInfo.Environment["PREFLIGHT_RESULT"] = scenario == "before-sql" ? "skipped" : "success";
+            processInfo.Environment["DATABASE_RESULT"] = scenario switch
+            {
+                "before-sql" => "skipped",
+                "review-blocked" or "sql-failed" => "failure",
+                "sql-interrupted" => "cancelled",
+                "sql-cancelled" => "cancelled",
+                _ => "success"
+            };
+            processInfo.Environment["APPLICATION_RESULT"] = scenario is "success" or "smoke-failed"
+                ? "success" : scenario == "api-failed" ? "failure" : "skipped";
+            processInfo.Environment["SMOKE_RESULT"] = scenario == "success"
+                ? "success" : scenario == "smoke-failed" ? "failure" : "skipped";
+            processInfo.Environment["AUTHCRAFT_SQL_ACCESS_TOKEN"] = "synthetic-secret-must-not-leak";
+            using var process = Process.Start(processInfo)!;
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.True(process.ExitCode == 0, await standardOutput + await standardError);
+            var json = File.ReadAllText(Path.Combine(evidenceDirectory, "deployment-attempt.json"));
+            using var attempt = JsonDocument.Parse(json);
+            Assert.Equal(result, attempt.RootElement.GetProperty("result").GetString());
+            Assert.Equal(scope, attempt.RootElement.GetProperty("transaction_scope").GetString());
+            Assert.Equal(failureState, attempt.RootElement.GetProperty("failure_state_verification").GetString());
+            Assert.Equal(healthResult, attempt.RootElement.GetProperty("health_result").GetString());
+            Assert.DoesNotContain("rolled_back", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("synthetic-secret-must-not-leak", json + File.ReadAllText(Path.Combine(directory, "summary.txt")), StringComparison.Ordinal);
+            Assert.Equal(30, attempt.RootElement.GetProperty("report_retention_days").GetInt32());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Theory]

@@ -1165,3 +1165,177 @@ T028/T029/T032 estan completos. T033/T035/T037/T038/T040/T041 siguen pendientes.
 No habilitar Production, no conceder aun `db_owner` y no publicar Staging hasta que
 el plan exacto sea reevaluado/revisado, el workflow de publicacion este listo y
 exista un procedimiento verificable para conceder y revocar el permiso temporal.
+
+### Ensayo inicial historico: atomicidad global no demostrada
+
+El 2026-11-09 se implemento T062 en `LocalEnvironmentSqlTests` y se ejecuto con
+SqlPackage 170.4.53.0 (Visual Studio) y 170.5.96.0 (dotnet tool). Se construyeron
+dos DACPACs sinteticos mediante MSBuild/SSDT: baseline y candidato con columna
+nullable/check nuevos y postdeploy que inserta una semilla, valida el check y
+puede emitir THROW 51000. No se modifico el DACPAC ni el guard de AuthCraft.
+Cada escenario publico una baseline en una base LocalDB distinta y descartable,
+cargo una fila sintetica y ejecuto Script/Publish con
+`IncludeTransactionalScripts=True`, `BlockOnPossibleDataLoss=True`,
+`DropObjectsNotInSource=False` y `ScriptDatabaseOptions=False`.
+
+En ambas herramientas el script incluye SET XACT_ABORT ON (linea 48),
+BEGIN TRANSACTION (52) y COMMIT TRANSACTION (117), pero el INSERT postdeploy
+empieza en 124, WITH CHECK CHECK en 125 y THROW en 127: quedan despues del COMMIT.
+La propia validacion diferida de DacFx aparece mas tarde, en 139.
+True no cubre la unidad esquema/postdeploy en este ensayo.
+
+Estado comprobado desde una conexion nueva despues de finalizar Publish:
+
+| Escenario | Exit code | Columna nueva | Check nuevo | Check confiable | Semilla postdeploy | Fila baseline |
+|-----------|-----------|---------------|-------------|-----------------|--------------------|---------------|
+| Exito | 0 | si | si | si | si | conservada |
+| Datos invalidos, SQL 547 | 1 | si | si | no | si | conservada |
+| Guard sintetico SQL 51000 | 1 | si | si | si | si | conservada |
+
+En el ensayo inicial, el test exigia baseline intacta ante ambos errores y **fallo** con
+`Transactional coverage gate failed`; es un bloqueo reproducible, no una suite
+aprobada. T062 registra el test implementado; T064 y dependientes no estan
+completadas. Se detuvo el incremento antes de modificar el inicializador local
+o el publicador remoto: IncludeTransactionalScripts=True se utilizo solamente
+en los fixtures, no se presenta como implementado en T063/T066.
+
+Logs sanitizados de ambas ejecuciones conservados en la carpeta privada de
+sesion `files/transaction-coverage`. Los scripts sinteticos, proyectos y bases
+temporales se eliminaron en finally. No se modifico la base development existente,
+no hubo conexion Azure, cambios de permisos, commit/push/dispatch ni Publish remoto.
+No se envolvio el SQL generado en otra transaccion ni se relajo el gate.
+
+Se requiere revisar el diseno antes de continuar: activar la opcion por si sola
+no satisface la atomicidad requerida. Mantener el estado parcial/desconocido tras
+fallos hasta inspeccion y no continuar a API/smoke/promocion. Este resultado local
+no acredita un comportamiento Azure diferente ni aprueba ningun release anterior.
+
+### Postdeploy transaccional por fases: implementado y verificado localmente
+
+Tras la decision autorizada de aceptar fases separadas, se implementaron T063–T067
+y T071. No se convirtio el ensayo inicial en una afirmacion de atomicidad global:
+el test conserva un control sin proteccion y agrega casos protegidos que usan
+el prefijo/sufijo del postdeploy versionado real.
+
+El inicializador y el publicador pasan IncludeTransactionalScripts=True y
+ScriptDatabaseOptions=False en todas las acciones. Script.PostDeployment.sql
+rechaza una transaccion ajena con 51001 antes de escribir; abre su propia unidad
+con XACT_ABORT ON/TRY/BEGIN TRANSACTION y solo hace COMMIT despues de semillas,
+siete validaciones y guard. CATCH revierte la unidad activa y relanza el error.
+El COMMIT de esquema DacFx anterior a esta fase se admite expresamente.
+
+Estado comprobado desde una conexion nueva, con ambas herramientas:
+
+| Fase postdeploy | Escenario | Columna/check DacFx | Check confiable | Semilla | Fila previa |
+|----------------|-----------|--------------------|-----------------|---------|-------------|
+| Sin proteccion (control) | Exito | presentes | si | presente | conservada |
+| Sin proteccion (control) | 547 | presentes | no | presente | conservada |
+| Sin proteccion (control) | 51000 | presentes | si | presente | conservada |
+| Protegida | Exito | presentes | si | presente | conservada |
+| Protegida | 547 | presentes | no | ausente | conservada |
+| Protegida | 51000 | presentes | no | ausente | conservada |
+
+El segundo fallo protegido demuestra tambien rollback del cambio de confianza
+que precede al THROW. Esto acredita separate_schema_and_postdeploy en el fixture,
+no una reversion del esquema. No inferir el estado remoto desde estos resultados.
+
+Validaciones locales completadas:
+
+- SqlPackage 170.5.96.0: 99 pruebas de la seleccion focalizada, sin fallos ni
+  omisiones, incluidos ambos ensayos por fases y Publish del DACPAC AuthCraft.
+- Seleccion final con SqlPackage 170.4.53.0: 101 pruebas, sin fallos ni omisiones;
+  agrega cobertura explicita de fallos 547/51000 del publicador y secuencia de
+  recuperacion. Compilo API/tests Release; persiste el warning CS0108 preexistente.
+- MSBuild/SSDT Release del DACPAC: cero errores y advertencias.
+- El inicializador publico el DACPAC en una base descartable, comprobo las 13
+  tablas, proveedor y todas las constraints confiables. Verifico siete llamadas
+  reales con las mismas opciones, sin modificar los hashes revisados.
+- El gate remoto se ensayo sin Azure sobre el SQL real de una reevaluacion local.
+  Exige el postdeploy versionado completo, incluido el salto de linea de :r y
+  lectura UTF8. Rechaza COMMIT prematuro, transaccion ausente, bloque alterado,
+  NOCHECK no cubierto y SQL posterior arbitrario. Solo permite la cola DacFx conocida.
+- El filtro local permite exclusivamente la limpieza conocida de #tmpErrors de
+  DacFx, incluidos finales CRLF, sin admitir tablas permanentes u otros temporales.
+- El parser exige exactamente `include_transactional_scripts=true` y
+  `postdeploy_transaction=true`; ausencia, False y duplicados impiden Publish.
+  Las pruebas de recuperacion conservan esquema parcial y no ejecutan restauracion
+  automatica, API o smoke despues de un fallo SQL.
+
+Logs sanitizados persistidos en la carpeta privada de sesion
+`files/transaction-coverage`: `protected-vs-tests.log` y
+`protected-global-99-tests.log`. El primero conserva version, hashes SQL sinteticos,
+limites y vectores observados por escenario. Las bases y archivos descartables
+se eliminaron en finally; la base development existente no se modifico.
+
+Pendientes al cerrar esta etapa: T068 (integrar campos/evidencia de transaccion en DeploymentAttempt),
+T069 (nuevo candidato y evaluacion remota autorizada) y T070 (revision autenticada
+de sus nuevos hashes). El run 42692449745 no contiene esta proteccion y no debe
+reutilizarse. No hubo commit/push/dispatch, conexiones Azure, permisos nuevos ni
+Publish remoto; Production permanece bloqueado.
+
+### T068: evidencia transaccional del intento integrada localmente
+
+La ruta de reanudacion ahora ejecuta la prueba exacta de fases en LocalDB antes
+de OIDC, con el SqlPackage que recibira el publicador. No reconstruye los paquetes
+candidatos. El harness descubre MSBuild/SSDT por vswhere en lugar de depender de
+rutas locales fijas; sus bases y proyectos sinteticos siguen siendo descartables.
+
+El ensayo genera seis SQL originales y un JSON que vincula herramienta/version,
+fuentes postdeploy/validaciones/fixture, hashes SQL, limites y estados observados.
+El publicador exige ademas el TRX con exactamente una prueba ejecutada/aprobada.
+Verifica version actual y hash del ejecutable, fuentes vigentes, seis casos unicos
+con sus estados esperados, limites y hashes SQL antes de permitir Publish.
+Rechaza evidencia ausente, JSON invalido, prueba omitida, caso ausente/duplicado,
+estado incorrecto, SQL alterado, limites insuficientes y herramienta/version/fuente
+distintas. La referencia incluye hash del plan real y linea inicial del postdeploy.
+
+`sql-attempt.json` se guarda pending antes de llamar Publish y se actualiza en
+finally incluso con fallo. Solo acredita separate_schema_and_postdeploy tras
+validar evidencia y plan; antes permanece unverified. Ante fallo SQL deja
+postdeploy_result/failure_state_verification=unknown y etapas posteriores
+not_executed. Incluso tras exito SQL conserva postdeploy_result=unknown hasta
+inspeccion independiente: no infiere committed/rolled_back del exit code.
+
+Actions agrega un `deployment-attempt.json` y resumen sanitizado. Solo registro y
+upload usan always(); API/smoke mantienen su condicion de exito. Se simularon ocho
+estados: bloqueo previo, revision bloqueada, fallo SQL, cancelacion sin registro,
+interrupcion con instantanea pending, fallo API, fallo smoke y exito. Smoke
+combinado fallido deja salud/autenticacion unknown, no inventa que ambas pruebas
+llegaron a ejecutarse. El artefacto `staging-deployment-attempt` retiene JSON, TRX,
+SQL sintetico y planes de evaluacion/reevaluacion durante 30 dias con el acceso
+del repositorio. Una perdida total del runner puede impedir captura/upload:
+evidencia no disponible sigue bloqueando y requiere inspeccion.
+
+Validacion local: 121 pruebas aprobadas, ninguna omitida:
+
+- 1 prueba exacta con seis escenarios Script/Publish reales, SqlPackage 170.4.53.0,
+  MSBuild/SSDT descubierto y TRX; Get-DeploymentTransactionVerification valido
+  realmente el conjunto, no solo un mock.
+- 120 regresiones de LocalEnvironmentSqlTests (DACPAC AuthCraft real),
+  DatabaseDeploymentReviewTests, DeploymentPipelineTests, DeploymentRecoveryTests
+  y StagingPublisherVerificationTests, incluidas las simulaciones del resumen.
+- Build API Release final: cero errores/advertencias. Los scripts del publicador
+  y nueve bloques PowerShell del workflow pasan parseo sintactico; diff --check
+  sin errores. Esto no sustituye ejecutar el workflow en GitHub.
+
+Evidencia privada de sesion en `files/transaction-attempt-proof-final`:
+`transaction-tests.trx`, `transaction-verification.json`, seis SQL sinteticos y
+`attempt-regressions.trx`. Hash SHA256 del JSON de prueba:
+`365661969338cecb9c5aaf6445385c93591ff72bf220f516bed2eeb50f0d9c5b`.
+Estos hashes son del ensayo local, no de un release Azure ni una aprobacion remota.
+
+T068 queda completada localmente. T039 sigue parcial y T069/T070 requieren nueva
+autorizacion de commit/push/dispatch/conexion y revision autenticada del nuevo
+candidato. No hubo publicaciones ni operaciones Azure; Production sigue bloqueado.
+
+### Autorizacion acotada para T069
+
+El usuario autorizo commit/push y evaluacion review-only de Staging, incluida
+conexion SQL y posible reactivacion/consumo, sin Publish, despliegue API, cambios
+de permisos ni operaciones sobre Production. Antes del push se confirmo mediante
+GitHub API que `main_authcraft-api.yml` sigue disabled_manually y el workflow
+Staging de evaluacion esta active. Esta autorizacion no es revision del SQL nuevo.
+
+La evaluacion conservara ademas `evaluation-toolchain.json` con version/hash del
+SqlPackage, commit/run y opciones, para comprobar el alcance de la herramienta
+exacta del runner sin inferir su version del encabezado del script.

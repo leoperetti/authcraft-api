@@ -9,6 +9,13 @@ Plantilla de script posterior a la implementación
                SELECT * FROM [$(TableName)]					
 --------------------------------------------------------------------------------------
 */
+IF @@TRANCOUNT <> 0
+    THROW 51001, 'Postdeployment requires a separate transaction.', 1;
+
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRANSACTION;
+
 -- Inserción inicial de proveedores si no existen
 IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'google')
 	INSERT INTO dbo.providers (name) VALUES ('google');
@@ -18,3 +25,11 @@ IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'github')
 	INSERT INTO dbo.providers (name) VALUES ('github');
 
 :r .\ValidateConstraints.sql
+
+COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF XACT_STATE() <> 0
+        ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;

@@ -17,6 +17,8 @@ param(
     [string]$SqlPackagePath,
     [string]$ReviewIssueNumber,
     [string]$StagingBaselineSha,
+    [string]$TransactionVerificationPath,
+    [string]$AttemptPath,
     [string]$AllowedReviewer = 'leoperetti'
 )
 
@@ -85,6 +87,7 @@ $commonArguments = @(
     '/p:BlockOnPossibleDataLoss=True',
     '/p:DropObjectsNotInSource=False',
     '/p:ScriptDatabaseOptions=False',
+    '/p:IncludeTransactionalScripts=True',
     "/AccessToken:$sqlAccessToken"
 )
 
@@ -233,6 +236,42 @@ function Get-AuthenticatedReview {
     return $latestReview
 }
 
+$attempt = $null
+if ($Mode -eq 'Publish') {
+    if (-not $AttemptPath) {
+        $AttemptPath = Join-Path $artifactDirectory "$TargetEnvironment-attempt-$ExpectedRunId-$evaluationId.json"
+    }
+    if (Test-Path -LiteralPath $AttemptPath) {
+        throw 'Deployment attempt evidence already exists; use a new attempt path.'
+    }
+    $attempt = [ordered]@{
+        schema_version = 1
+        release_run_id = $ExpectedRunId
+        commit_sha = $ExpectedCommitSha.ToLowerInvariant()
+        target_environment = $TargetEnvironment
+        database_server = $targetServer
+        database_name = $targetDatabase
+        started_at = [DateTimeOffset]::UtcNow.ToString('o')
+        finished_at = $null
+        result = 'blocked'
+        schema_result = 'blocked'
+        application_result = 'not_executed'
+        health_result = 'not_executed'
+        authentication_result = 'not_executed'
+        include_transactional_scripts = $true
+        postdeploy_transaction = $false
+        transaction_scope = 'unverified'
+        postdeploy_result = 'pending'
+        failure_state_verification = 'pending'
+        transaction_verification_reference = $null
+        dacpac_sha256 = $dacpacHash
+        deploy_report_sha256 = $null
+        deploy_script_sha256 = $null
+        failure_stage = 'schema_review'
+        sanitized_failure_summary = 'La revision del esquema bloqueo la publicacion.'
+        recommended_next_step = 'Revisar la evidencia y obtener una revision exacta antes de reintentar.'
+    }
+}
 try {
     $reportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$reportPath"))
     if ($reportExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
@@ -246,6 +285,10 @@ try {
 
     $reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $scriptHash = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($null -ne $attempt) {
+        $attempt.deploy_report_sha256 = $reportHash
+        $attempt.deploy_script_sha256 = $scriptHash
+    }
     Import-Module (Join-Path $PSScriptRoot 'DeploymentReview.psm1') -Force
     if (-not (Test-LocalDeploymentScriptSafety -ScriptContent (Get-Content -LiteralPath $scriptPath -Raw))) {
         throw 'Deployment script contains destructive statements; automatic publication is blocked.'
@@ -267,10 +310,13 @@ try {
         return
     }
 
-    $deploymentSql = Get-Content -LiteralPath $scriptPath -Raw
-    if ([Regex]::IsMatch($deploymentSql, '(?i)\bNOCHECK\b')) {
+    $deploymentSql = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+    if ($Mode -eq 'Publish') {
         $validationPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'authcraft-db\postdeploys\ValidateConstraints.sql'
-        $validationSql = (Get-Content -LiteralPath $validationPath -Raw).Replace("`r`n", "`n").Trim()
+        $postdeploymentPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'authcraft-db\postdeploys\Script.PostDeployment.sql'
+        $validationSql = (Get-Content -LiteralPath $postdeploymentPath -Raw -Encoding UTF8).Replace("`r`n", "`n").Trim()
+        $constraintSql = (Get-Content -LiteralPath $validationPath -Raw -Encoding UTF8).Replace("`r`n", "`n")
+        $validationSql = $validationSql.Replace(':r .\ValidateConstraints.sql', $constraintSql)
         # After the exact block, allow only DacFx's validation and progress statements.
         $normalizedSql = $deploymentSql.Replace("`r`n", "`n")
         $validationIndex = $normalizedSql.LastIndexOf("`n$validationSql", [StringComparison]::Ordinal)
@@ -299,8 +345,9 @@ try {
         if ([string]::IsNullOrWhiteSpace($validationSql) -or
             $validationIndex -lt 0 -or -not [string]::IsNullOrWhiteSpace($validationTail) -or
             [Regex]::IsMatch($unrecognizedSql, '(?i)\bNOCHECK\b')) {
-            throw 'SQL plan contains NOCHECK without the exact final constraint validation block. Publication is blocked; regenerate and review the plan.'
+            throw 'SQL plan lacks the exact transactional postdeployment block, contains uncovered NOCHECK, or has an unrecognized tail. Publication is blocked; regenerate and review the plan.'
         }
+        $attempt.postdeploy_transaction = $true
     }
 
     if ($ReviewIssueNumber -notmatch '^[1-9][0-9]*$') {
@@ -343,10 +390,30 @@ try {
         throw 'DACPAC changed during approval revalidation. Publication is blocked.'
     }
 
+    $attempt.transaction_verification_reference = Get-DeploymentTransactionVerification `
+        -Path $TransactionVerificationPath -SqlPackagePath $SqlPackagePath
+    $attempt.transaction_verification_reference | Add-Member -NotePropertyName deploy_script_sha256 -NotePropertyValue $scriptHash
+    $attempt.transaction_verification_reference | Add-Member -NotePropertyName postdeployment_start_line `
+        -NotePropertyValue (1 + ($normalizedSql.Substring(0, $validationIndex + 1).ToCharArray() | Where-Object { $_ -eq "`n" }).Count)
+    $attempt.transaction_scope = 'separate_schema_and_postdeploy'
+    $attempt.failure_stage = 'schema_publish'
+    $attempt.result = 'pending'
+    $attempt.schema_result = 'pending'
+    $attempt.postdeploy_result = 'unknown'
+    $attempt.failure_state_verification = 'unknown'
+    $attempt.sanitized_failure_summary = 'La publicacion SQL no tiene un resultado confirmado; el esquema puede estar aplicado parcialmente.'
+    $attempt.recommended_next_step = 'Detener API y smoke; inspeccionar esquema, datos y confianza desde otra conexion antes de reintentar.'
+    $attempt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $AttemptPath -Encoding UTF8
     $publishExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:Publish') + $commonArguments)
     if ($publishExitCode -ne 0) {
         throw "SqlPackage Publish failed. Inspect the target; no rollback was attempted. $script:sqlPackageFailure"
     }
+    $attempt.result = 'succeeded'
+    $attempt.schema_result = 'succeeded'
+    $attempt.failure_state_verification = 'pending'
+    $attempt.failure_stage = $null
+    $attempt.sanitized_failure_summary = $null
+    $attempt.recommended_next_step = $null
 
     [pscustomobject]@{
         state = 'published'
@@ -360,13 +427,26 @@ try {
         deploy_report_path = $reportPath
         deploy_script_path = $scriptPath
         review_comment_id = $review.id
+        transaction_scope = $attempt.transaction_scope
+        deployment_attempt_path = $AttemptPath
     } | ConvertTo-Json -Compress
 }
 finally {
-    $sqlAccessToken = $null
-    $githubToken = $null
-    [Environment]::SetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN', $originalSqlAccessToken)
-    [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $originalGitHubToken)
-    $originalSqlAccessToken = $null
-    $originalGitHubToken = $null
+    try {
+        if ($null -ne $attempt) {
+            if ($attempt.result -eq 'pending') {
+                $attempt.result = 'failed'
+                $attempt.schema_result = 'failed'
+            }
+            $attempt.finished_at = [DateTimeOffset]::UtcNow.ToString('o')
+            $attempt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $AttemptPath -Encoding UTF8
+        }
+    } finally {
+        $sqlAccessToken = $null
+        $githubToken = $null
+        [Environment]::SetEnvironmentVariable('AUTHCRAFT_SQL_ACCESS_TOKEN', $originalSqlAccessToken)
+        [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $originalGitHubToken)
+        $originalSqlAccessToken = $null
+        $originalGitHubToken = $null
+    }
 }

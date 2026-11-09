@@ -199,6 +199,8 @@ public sealed class DeploymentPipelineTests
             block_on_possible_data_loss=true
             drop_objects_not_in_source=false
             script_database_options=false
+            include_transactional_scripts=true
+            postdeploy_transaction=true
             deploy_report_sha256={{new string('c', 64)}}
             deploy_script_sha256={{new string('d', 64)}}
             '@
@@ -262,7 +264,10 @@ public sealed class DeploymentPipelineTests
             $truncateTable = Test-LocalDeploymentScriptSafety -ScriptContent 'TRUNCATE TABLE dbo.users;'
             $dropColumn = Test-LocalDeploymentScriptSafety -ScriptContent 'ALTER TABLE dbo.users DROP COLUMN secret;'
             $replaceConstraint = Test-LocalDeploymentScriptSafety -ScriptContent 'ALTER TABLE dbo.users DROP CONSTRAINT CK_users_name;'
-            if ($safe -and -not $dropDatabase -and -not $deleteRows -and -not $truncateTable -and -not $dropColumn -and $replaceConstraint) { exit 0 }
+            $temporaryCleanup = Test-LocalDeploymentScriptSafety -ScriptContent "DROP TABLE #tmpErrors`r`nGO"
+            $permanentErrors = Test-LocalDeploymentScriptSafety -ScriptContent 'DROP TABLE dbo.tmpErrors;'
+            $otherTemporaryTable = Test-LocalDeploymentScriptSafety -ScriptContent 'DROP TABLE #tmpErrors_business;'
+            if ($safe -and -not $dropDatabase -and -not $deleteRows -and -not $truncateTable -and -not $dropColumn -and $replaceConstraint -and $temporaryCleanup -and -not $permanentErrors -and -not $otherTemporaryTable) { exit 0 }
             exit 1
             """;
         File.WriteAllText(scriptPath, script);

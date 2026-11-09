@@ -101,7 +101,14 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Record deployment start time
+        id: attempt-start
+        shell: pwsh
+        run: |
+          "started_at=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content -Path $env:GITHUB_OUTPUT
+
       - name: Require synthetic Staging smoke credentials before remote changes
+        id: credentials
         shell: pwsh
         env:
           AUTHCRAFT_STAGING_SMOKE_IDENTIFIER: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_IDENTIFIER }}
@@ -132,6 +139,39 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
           path: candidate-source
+
+      - name: Set up .NET for isolated transaction verification
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Verify transaction coverage using this runner's deployment tool
+        id: transaction-verification
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.SQL.SSDT -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installation)) {
+            throw 'An SSDT-enabled Visual Studio installation is required.'
+          }
+          $env:SQLPACKAGE_PATH = Join-Path $installation 'Common7\IDE\Extensions\Microsoft\SQLDB\DAC\SqlPackage.exe'
+          if (-not (Test-Path -LiteralPath $env:SQLPACKAGE_PATH -PathType Leaf)) {
+            throw 'The deployment SqlPackage executable is unavailable.'
+          }
+          & SqlLocalDB.exe start MSSQLLocalDB
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated LocalDB transaction verification is unavailable.' }
+          $env:AUTHCRAFT_LOCAL_ENVIRONMENT_SQL_CONNECTION = 'Server=(localdb)\MSSQLLocalDB;Database=authcraft_development;Integrated Security=True;TrustServerCertificate=True'
+          $env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY = Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence'
+          dotnet test .\authcraft-api.Tests\authcraft-api.Tests.csproj --configuration Release `
+            --filter 'FullyQualifiedName=authcraft_api.Tests.LocalEnvironmentSqlTests.TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage' `
+            --logger 'trx;LogFileName=transaction-tests.trx' --results-directory $env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY
+          if ($LASTEXITCODE -ne 0) { throw 'Transaction phase verification failed; no remote publication is allowed.' }
+          Import-Module .\scripts\DeploymentReview.psm1 -Force
+          $proofPath = Join-Path $env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY 'transaction-verification.json'
+          $null = Get-DeploymentTransactionVerification -Path $proofPath -SqlPackagePath $env:SQLPACKAGE_PATH
+          "sqlpackage_path=$env:SQLPACKAGE_PATH" | Add-Content -Path $env:GITHUB_OUTPUT
 
       - name: Download the exact original Staging release artifacts
         uses: actions/download-artifact@v4
@@ -177,6 +217,7 @@ jobs:
           subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
 
       - name: Verify release provenance and current Staging gates
+        id: preflight
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -232,6 +273,7 @@ jobs:
           $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
       - name: Publish the reviewed Staging database plan
+        id: database
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -240,6 +282,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
           REVIEW_ISSUE_NUMBER: ${{ inputs.review_issue_number }}
           STAGING_BASELINE_SHA: ${{ inputs.staging_baseline_sha }}
+          SQLPACKAGE_PATH: ${{ steps.transaction-verification.outputs.sqlpackage_path }}
         run: |
           $ErrorActionPreference = 'Stop'
           $account = az account show --output json | ConvertFrom-Json
@@ -265,7 +308,10 @@ jobs:
               -ExpectedCommitSha $env:RELEASE_COMMIT_SHA `
               -ExpectedRunId $env:RELEASE_RUN_ID `
               -ReviewIssueNumber $env:REVIEW_ISSUE_NUMBER `
-              -StagingBaselineSha $env:STAGING_BASELINE_SHA
+              -StagingBaselineSha $env:STAGING_BASELINE_SHA `
+              -SqlPackagePath $env:SQLPACKAGE_PATH `
+              -TransactionVerificationPath (Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\transaction-verification.json') `
+              -AttemptPath (Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\sql-attempt.json')
             if ($LASTEXITCODE -ne 0) { throw 'The reviewed Staging database deployment failed.' }
             $publishResult = ($publishOutput -join "`n") | ConvertFrom-Json
             if ($publishResult.state -cne 'published' -or
@@ -282,6 +328,7 @@ jobs:
           }
 
       - name: Deploy the same API package to Staging
+        id: application
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -290,6 +337,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Staging API package deployment failed after the database step; inspect Staging before retrying.' }
 
       - name: Verify Staging health, synthetic login, and tenant roles
+        id: smoke
         shell: pwsh
         env:
           AUTHCRAFT_STAGING_SMOKE_IDENTIFIER: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_IDENTIFIER }}
@@ -300,3 +348,103 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & .\scripts\Test-StagingRelease.ps1 -ExpectedVersion '${{ needs.resolve-release.outputs.release_sha }}'
           if ($LASTEXITCODE -ne 0) { throw 'Staging release smoke verification failed.' }
+
+      - name: Record Staging deployment attempt
+        if: always()
+        shell: pwsh
+        env:
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
+          TRANSACTION_RESULT: ${{ steps.transaction-verification.outcome }}
+          PREFLIGHT_RESULT: ${{ steps.preflight.outcome }}
+          DATABASE_RESULT: ${{ steps.database.outcome }}
+          APPLICATION_RESULT: ${{ steps.application.outcome }}
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+          STARTED_AT: ${{ steps.attempt-start.outputs.started_at }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence'
+          New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+          $sqlAttemptPath = Join-Path $evidenceDirectory 'sql-attempt.json'
+          if (Test-Path -LiteralPath $sqlAttemptPath -PathType Leaf) {
+            $sqlAttempt = Get-Content -LiteralPath $sqlAttemptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $attempt = @{}
+            foreach ($property in $sqlAttempt.PSObject.Properties) {
+              $attempt[$property.Name] = $property.Value
+            }
+          } else {
+            $attempt = @{
+              schema_version = 1
+              release_run_id = $env:RELEASE_RUN_ID
+              commit_sha = $env:RELEASE_COMMIT_SHA
+              target_environment = 'staging'
+              started_at = $env:STARTED_AT
+              result = 'blocked'
+              schema_result = 'not_executed'
+              include_transactional_scripts = $null
+              postdeploy_transaction = $null
+              transaction_scope = 'unverified'
+              transaction_verification_reference = $null
+              postdeploy_result = 'pending'
+              failure_state_verification = 'pending'
+              failure_stage = 'preflight'
+              sanitized_failure_summary = 'La publicacion se bloqueo antes de obtener evidencia SQL.'
+              recommended_next_step = 'Revisar los gates y conservar la evidencia antes de reintentar.'
+            }
+            if ($env:DATABASE_RESULT -in @('failure', 'cancelled')) {
+              $attempt.schema_result = 'unknown'
+              $attempt.postdeploy_result = 'unknown'
+              $attempt.failure_state_verification = 'unknown'
+              $attempt.result = 'failed'
+            }
+          }
+          function Get-StageResult([string]$Outcome) {
+            switch ($Outcome) {
+              'success' { 'succeeded' }
+              'failure' { 'failed' }
+              'cancelled' { 'unknown' }
+              { $_ -in @('', 'skipped') } { 'not_executed' }
+              default { throw 'Unexpected workflow stage outcome.' }
+            }
+          }
+          $attempt.deployment_run_id = $env:GITHUB_RUN_ID
+          $attempt.finished_at = [DateTimeOffset]::UtcNow.ToString('o')
+          $attempt.transaction_test_result = Get-StageResult $env:TRANSACTION_RESULT
+          $attempt.preflight_result = Get-StageResult $env:PREFLIGHT_RESULT
+          $attempt.application_result = Get-StageResult $env:APPLICATION_RESULT
+          $attempt.smoke_result = Get-StageResult $env:SMOKE_RESULT
+          $attempt.health_result = if ($env:SMOKE_RESULT -eq 'failure') { 'unknown' } else { $attempt.smoke_result }
+          $attempt.authentication_result = $attempt.health_result
+          $attempt.report_artifact_reference = 'staging-deployment-attempt'
+          $attempt.report_retention_days = 30
+          if ($attempt.result -eq 'pending' -and $env:DATABASE_RESULT -in @('failure', 'cancelled')) {
+            $attempt.result = 'failed'
+            $attempt.schema_result = 'unknown'
+            $attempt.postdeploy_result = 'unknown'
+            $attempt.failure_state_verification = 'unknown'
+          }
+          if ($env:SMOKE_RESULT -eq 'success') {
+            $attempt.result = 'succeeded'
+          } elseif ($env:APPLICATION_RESULT -in @('failure', 'cancelled') -or $env:SMOKE_RESULT -in @('failure', 'cancelled')) {
+            $attempt.result = 'failed'
+            $attempt.failure_stage = if ($env:APPLICATION_RESULT -in @('failure', 'cancelled')) { 'application_publish' } else { 'smoke' }
+            $attempt.sanitized_failure_summary = 'Fallo una etapa posterior a SQL; no se autoriza promocion.'
+            $attempt.recommended_next_step = 'Inspeccionar la API y su compatibilidad con el esquema aplicado antes de recuperar.'
+          } elseif ($attempt.result -eq 'succeeded') {
+            $attempt.result = 'failed'
+          }
+          $attempt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'deployment-attempt.json') -Encoding UTF8
+          "Staging: result=$($attempt.result); transaction_scope=$($attempt.transaction_scope); postdeploy_result=$($attempt.postdeploy_result); failure_state_verification=$($attempt.failure_state_verification). No rollback is inferred from an exit code." |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve Staging deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-deployment-attempt
+          path: |
+            ${{ runner.temp }}/staging-deployment-evidence/
+            ${{ runner.temp }}/staging-release/dacpac/staging-*-report.xml
+            ${{ runner.temp }}/staging-release/dacpac/staging-*-script.sql
+          if-no-files-found: error
+          retention-days: 30

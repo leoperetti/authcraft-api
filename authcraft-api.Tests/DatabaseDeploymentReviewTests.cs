@@ -63,6 +63,42 @@ public sealed class DatabaseDeploymentReviewTests
         Assert.Equal("previous reviewed report", File.ReadAllText(sandbox.ReviewedReportPath));
         Assert.Equal("previous reviewed SQL", File.ReadAllText(sandbox.ReviewedScriptPath));
         Assert.DoesNotContain("native diagnostic", result.Output + result.Error, StringComparison.OrdinalIgnoreCase);
+        using var attempt = JsonDocument.Parse(File.ReadAllText(sandbox.AttemptPath));
+        Assert.Equal("succeeded", attempt.RootElement.GetProperty("result").GetString());
+        Assert.Equal("separate_schema_and_postdeploy", attempt.RootElement.GetProperty("transaction_scope").GetString());
+        Assert.True(attempt.RootElement.GetProperty("include_transactional_scripts").GetBoolean());
+        Assert.True(attempt.RootElement.GetProperty("postdeploy_transaction").GetBoolean());
+        Assert.Equal("unknown", attempt.RootElement.GetProperty("postdeploy_result").GetString());
+        Assert.Equal("pending", attempt.RootElement.GetProperty("failure_state_verification").GetString());
+        Assert.Equal(6, attempt.RootElement.GetProperty("transaction_verification_reference").GetProperty("cases").GetArrayLength());
+        Assert.Equal(published.RootElement.GetProperty("deploy_script_sha256").GetString(),
+            attempt.RootElement.GetProperty("transaction_verification_reference").GetProperty("deploy_script_sha256").GetString());
+    }
+
+    [Theory]
+    [InlineData("missing-proof")]
+    [InlineData("invalid-proof")]
+    [InlineData("wrong-tool-proof")]
+    [InlineData("wrong-version-proof")]
+    [InlineData("wrong-source-proof")]
+    [InlineData("missing-case-proof")]
+    [InlineData("wrong-state-proof")]
+    [InlineData("skipped-proof")]
+    [InlineData("changed-sql-proof")]
+    [InlineData("wrong-boundaries-proof")]
+    [InlineData("duplicate-case-proof")]
+    [InlineData("missing-trx-proof")]
+    public void Publish_RequiresToolAndSourceBoundExecutedTransactionProof(string scenario)
+    {
+        using var sandbox = new ReviewSandbox();
+        var result = sandbox.Run(scenario);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.DoesNotContain("/Action:Publish", sandbox.Actions);
+        Assert.DoesNotContain(sandbox.SyntheticToken, result.Output + result.Error, StringComparison.Ordinal);
+        using var attempt = JsonDocument.Parse(File.ReadAllText(sandbox.AttemptPath));
+        Assert.Equal("blocked", attempt.RootElement.GetProperty("result").GetString());
+        Assert.Equal("unverified", attempt.RootElement.GetProperty("transaction_scope").GetString());
+        Assert.Equal("pending", attempt.RootElement.GetProperty("postdeploy_result").GetString());
     }
 
     [Theory]
@@ -86,10 +122,18 @@ public sealed class DatabaseDeploymentReviewTests
     [InlineData("validation-not-final")]
     [InlineData("validation-followed-by-write")]
     [InlineData("validation-modified")]
+    [InlineData("postdeploy-early-commit")]
+    [InlineData("postdeploy-no-transaction")]
     [InlineData("uncovered-constraint")]
     [InlineData("reviewer-override")]
     [InlineData("wrong-options")]
     [InlineData("missing-options")]
+    [InlineData("missing-transaction-option")]
+    [InlineData("false-transaction-option")]
+    [InlineData("duplicate-transaction-option")]
+    [InlineData("missing-postdeploy-option")]
+    [InlineData("false-postdeploy-option")]
+    [InlineData("duplicate-postdeploy-option")]
     [InlineData("wrong-staging-baseline")]
     [InlineData("missing-api-compatibility")]
     [InlineData("missing-data-impact")]
@@ -104,7 +148,8 @@ public sealed class DatabaseDeploymentReviewTests
         Assert.DoesNotContain("/Action:Publish", sandbox.Actions);
         Assert.DoesNotContain(sandbox.SyntheticToken, result.Output + result.Error, StringComparison.Ordinal);
         if (scenario is "unvalidated-check" or "unvalidated-foreign-key" or "disabled-constraint"
-            or "validation-not-final" or "validation-followed-by-write" or "validation-modified" or "uncovered-constraint")
+            or "validation-not-final" or "validation-followed-by-write" or "validation-modified" or "uncovered-constraint"
+            or "postdeploy-early-commit" or "postdeploy-no-transaction")
         {
             Assert.Contains("NOCHECK", result.Error, StringComparison.Ordinal);
             Assert.Equal(2, sandbox.Actions.Length);
@@ -121,13 +166,15 @@ public sealed class DatabaseDeploymentReviewTests
         }
     }
 
-    [Fact]
-    public void Publish_FailureDoesNotAttemptRollbackOrExposeNativeDiagnostics()
+    [Theory]
+    [InlineData("547")]
+    [InlineData("51000")]
+    public void Publish_FailureDoesNotAttemptRollbackOrExposeNativeDiagnostics(string errorNumber)
     {
         using var sandbox = new ReviewSandbox();
         var protectedFiles = sandbox.SnapshotProtectedFiles();
 
-        var result = sandbox.Run("publish-fails");
+        var result = sandbox.Run($"publish-fails-{errorNumber}");
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Equal(
@@ -138,6 +185,12 @@ public sealed class DatabaseDeploymentReviewTests
         Assert.DoesNotContain(sandbox.SyntheticToken, result.Output + result.Error, StringComparison.Ordinal);
         Assert.Equal(protectedFiles, sandbox.SnapshotProtectedFiles());
         Assert.Equal("schema-partially-applied", File.ReadAllText(sandbox.SchemaStatePath));
+        using var attempt = JsonDocument.Parse(File.ReadAllText(sandbox.AttemptPath));
+        Assert.Equal("failed", attempt.RootElement.GetProperty("result").GetString());
+        Assert.Equal("unknown", attempt.RootElement.GetProperty("failure_state_verification").GetString());
+        Assert.Equal("unknown", attempt.RootElement.GetProperty("postdeploy_result").GetString());
+        Assert.Equal("not_executed", attempt.RootElement.GetProperty("application_result").GetString());
+        Assert.DoesNotContain(sandbox.SyntheticToken, File.ReadAllText(sandbox.AttemptPath), StringComparison.Ordinal);
     }
 
     private sealed class ReviewSandbox : IDisposable
@@ -171,7 +224,7 @@ public sealed class DatabaseDeploymentReviewTests
             var manifestPath = Path.Combine(_directory, "manifest.json");
             var sqlPackagePath = Path.Combine(_directory, "sqlpackage.ps1");
             var validationSqlPath = Path.Combine(
-                FindRepositoryRoot(), "authcraft-db", "postdeploys", "ValidateConstraints.sql");
+                FindRepositoryRoot(), "authcraft-db", "postdeploys", "Script.PostDeployment.sql");
             File.WriteAllBytes(dacpacPath, [1, 2, 3]);
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
             {
@@ -185,10 +238,11 @@ public sealed class DatabaseDeploymentReviewTests
             }));
             File.WriteAllText(sqlPackagePath, """
                 $ErrorActionPreference = 'Stop'
+                if ($args[0] -eq '/Version') { Write-Output '170.4.53.0'; exit 0 }
                 $action = @($args | Where-Object { $_ -like '/Action:*' })[0]
                 Add-Content -LiteralPath $env:REVIEW_TEST_ACTION_LOG -Value $action
                 foreach ($required in @('/p:BlockOnPossibleDataLoss=True', '/p:DropObjectsNotInSource=False',
-                    '/p:ScriptDatabaseOptions=False',
+                    '/p:ScriptDatabaseOptions=False', '/p:IncludeTransactionalScripts=True',
                     '/TargetTrustServerCertificate:False',
                     '/TargetDatabaseName:authcraft-db-staging',
                     '/TargetServerName:tcp:authcraftdbbrasil.database.windows.net,1433')) {
@@ -202,7 +256,10 @@ public sealed class DatabaseDeploymentReviewTests
                 if ($action -eq '/Action:Script') {
                     $path = @($args | Where-Object { $_ -like '/DeployScriptPath:*' })[0].Substring('/DeployScriptPath:'.Length)
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recheck-output' -and $path -like '*recheck-*-script.sql') { exit 0 }
-                    $sql = 'CREATE TABLE dbo.synthetic_test (id INT);'
+                    $validation = Get-Content -LiteralPath $env:REVIEW_TEST_VALIDATION_SQL -Raw -Encoding UTF8
+                    $constraints = Get-Content -LiteralPath (Join-Path (Split-Path $env:REVIEW_TEST_VALIDATION_SQL) 'ValidateConstraints.sql') -Raw
+                    $validation = $validation.Replace(':r .\ValidateConstraints.sql', $constraints)
+                    $sql = "CREATE TABLE dbo.synthetic_test (id INT);`nGO`n" + $validation + "`nGO`n"
                     if ($env:REVIEW_TEST_SCENARIO -eq 'destructive-plan') { $sql = 'DROP TABLE dbo.existing_data;' }
                     if ($env:REVIEW_TEST_SCENARIO -in @('unvalidated-check', 'evaluate-unvalidated-check')) {
                         $sql = 'ALTER TABLE [dbo].[synthetic_test] WITH NOCHECK ADD CONSTRAINT [CK_test] CHECK (id > 0);'
@@ -213,14 +270,20 @@ public sealed class DatabaseDeploymentReviewTests
                     if ($env:REVIEW_TEST_SCENARIO -eq 'disabled-constraint') {
                         $sql = 'ALTER TABLE [dbo].[synthetic_test] NOCHECK CONSTRAINT [CK_test];'
                     }
-                    if ($env:REVIEW_TEST_SCENARIO -in @('validated-deferred-check', 'validated-dacfx-tail', 'validation-not-final', 'validation-followed-by-write', 'validation-modified', 'uncovered-constraint')) {
+                    if ($env:REVIEW_TEST_SCENARIO -in @('validated-deferred-check', 'validated-dacfx-tail', 'validation-not-final', 'validation-followed-by-write', 'validation-modified', 'uncovered-constraint', 'postdeploy-early-commit', 'postdeploy-no-transaction')) {
                         $sql = "ALTER TABLE [dbo].[invitations] WITH NOCHECK ADD CONSTRAINT [CK_invitations_purpose] CHECK (purpose IS NULL);`nGO`n"
                         if ($env:REVIEW_TEST_SCENARIO -eq 'uncovered-constraint') {
                             $sql = $sql -replace 'CK_invitations_purpose', 'CK_uncovered'
                         }
-                        $validation = Get-Content -LiteralPath $env:REVIEW_TEST_VALIDATION_SQL -Raw
                         if ($env:REVIEW_TEST_SCENARIO -eq 'validation-modified') {
                             $validation = $validation -replace 'WITH CHECK CHECK', 'WITH NOCHECK CHECK'
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'postdeploy-early-commit') {
+                            $validation = $validation.Replace('ALTER TABLE [dbo].[invitations] WITH CHECK CHECK CONSTRAINT [FK_invitations_accepted_identity];',
+                                'COMMIT TRANSACTION; ALTER TABLE [dbo].[invitations] WITH CHECK CHECK CONSTRAINT [FK_invitations_accepted_identity];')
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'postdeploy-no-transaction') {
+                            $validation = $validation.Replace('BEGIN TRANSACTION;', '')
                         }
                         $sql += $validation + "`nGO`n"
                         if ($env:REVIEW_TEST_SCENARIO -eq 'validated-dacfx-tail') {
@@ -237,8 +300,15 @@ public sealed class DatabaseDeploymentReviewTests
                     if (Test-Path -LiteralPath $env:REVIEW_TEST_DRIFT_PATH) { $sql += ' ALTER TABLE dbo.synthetic_test ADD other_id INT;' }
                     [IO.File]::WriteAllText($path, $sql)
                 }
-                if ($action -eq '/Action:Publish' -and $env:REVIEW_TEST_SCENARIO -eq 'publish-fails') {
+                if ($action -eq '/Action:Publish') {
+                    $snapshot = Get-Content -LiteralPath (Join-Path (Split-Path $env:REVIEW_TEST_ACTION_LOG) 'deployment-attempt.json') -Raw | ConvertFrom-Json
+                    if ($snapshot.result -cne 'pending' -or $snapshot.transaction_scope -cne 'separate_schema_and_postdeploy') {
+                        throw 'Expected a persisted, verified pending attempt before Publish.'
+                    }
+                }
+                if ($action -eq '/Action:Publish' -and $env:REVIEW_TEST_SCENARIO -like 'publish-fails-*') {
                     [IO.File]::WriteAllText($env:REVIEW_TEST_SCHEMA_STATE_PATH, 'schema-partially-applied')
+                    Write-Output "SQL error $($env:REVIEW_TEST_SCENARIO.Substring('publish-fails-'.Length))"
                     Write-Error "native diagnostic $env:AUTHCRAFT_SQL_ACCESS_TOKEN"
                     exit 1
                 }
@@ -246,6 +316,7 @@ public sealed class DatabaseDeploymentReviewTests
                 """);
             var publisherPath = Path.Combine(FindRepositoryRoot(), "scripts", "Invoke-DatabaseDeployment.ps1");
             ValidationSqlPath = validationSqlPath;
+            AttemptPath = Path.Combine(_directory, "deployment-attempt.json");
             File.WriteAllText(_harnessPath, $$"""
                 $ErrorActionPreference = 'Stop'
                 $script:commentsRead = 0
@@ -303,6 +374,8 @@ public sealed class DatabaseDeploymentReviewTests
                 block_on_possible_data_loss=true
                 drop_objects_not_in_source=false
                 script_database_options=$scriptDatabaseOptions
+                include_transactional_scripts=true
+                postdeploy_transaction=true
                 deploy_report_sha256=$reportHash
                 deploy_script_sha256=$sqlHash
                 "@
@@ -317,6 +390,16 @@ public sealed class DatabaseDeploymentReviewTests
                     }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-options') {
                         $body = $body -replace '(?m)^script_database_options=.*\r?\n', ''
+                    }
+                    foreach ($option in @('transaction', 'postdeploy')) {
+                        $field = if ($option -eq 'transaction') { 'include_transactional_scripts' } else { 'postdeploy_transaction' }
+                        if ($env:REVIEW_TEST_SCENARIO -eq "missing-$option-option") {
+                            $body = $body -replace "(?m)^$field=.*\r?\n", ''
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq "false-$option-option") {
+                            $body = $body.Replace("$field=true", "$field=false")
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq "duplicate-$option-option") { $body += "`n$field=true" }
                     }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'duplicate-decision') { $body += "`ndeployment_review=rejected" }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'plan-drift') { Set-Content -LiteralPath $env:REVIEW_TEST_DRIFT_PATH -Value 'changed' }
@@ -336,7 +419,61 @@ public sealed class DatabaseDeploymentReviewTests
                     SqlPackagePath = '{{sqlPackagePath}}'
                     ReviewIssueNumber = '10'
                     StagingBaselineSha = 'unknown'
+                    AttemptPath = '{{AttemptPath}}'
+                    TransactionVerificationPath = '{{Path.Combine(_directory, "transaction-verification.json")}}'
                 }
+                $proofDirectory = '{{_directory}}'
+                $cases = @(
+                    foreach ($protected in @($false, $true)) {
+                        foreach ($scenario in @('success', '547', '51000')) {
+                            $modeName = if ($protected) { 'protected' } else { 'control' }
+                            $sqlFile = "$modeName-$scenario.sql"
+                            $sql = "SET XACT_ABORT ON;`nBEGIN TRANSACTION;`nCOMMIT TRANSACTION;`n"
+                            if ($protected) { $sql += "BEGIN TRANSACTION;`n" }
+                            $sql += "INSERT dbo.transaction_seeds (id) VALUES (2);`n"
+                            if ($protected) { $sql += "COMMIT TRANSACTION;`n" }
+                            Set-Content -LiteralPath (Join-Path $proofDirectory $sqlFile) -Value $sql
+                            $trusted = if ($scenario -eq 'success' -or ($scenario -eq '51000' -and -not $protected)) { 1 } else { 0 }
+                            $seed = if ($protected -and $scenario -ne 'success') { 0 } else { 1 }
+                            @{
+                                protected_postdeployment = $protected
+                                scenario = $scenario
+                                exit_code = $(if ($scenario -eq 'success') { 0 } else { 1 })
+                                state = @(1, 1, $trusted, $seed, 1)
+                                sql_file = $sqlFile
+                                sql_sha256 = (Get-FileHash (Join-Path $proofDirectory $sqlFile) -Algorithm SHA256).Hash.ToLowerInvariant()
+                            }
+                        }
+                    }
+                )
+                $proof = @{
+                    schema_version = 1
+                    sqlpackage_version = '170.4.53.0'
+                    sqlpackage_sha256 = (Get-FileHash '{{sqlPackagePath}}' -Algorithm SHA256).Hash.ToLowerInvariant()
+                    postdeployment_sha256 = (Get-FileHash '{{validationSqlPath}}' -Algorithm SHA256).Hash.ToLowerInvariant()
+                    validation_sha256 = (Get-FileHash (Join-Path (Split-Path '{{validationSqlPath}}') 'ValidateConstraints.sql') -Algorithm SHA256).Hash.ToLowerInvariant()
+                    fixture_sha256 = (Get-FileHash '{{Path.Combine(FindRepositoryRoot(), "authcraft-api.Tests", "LocalEnvironmentSqlTests.cs")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
+                    cases = $cases
+                }
+                $outcome = 'Passed'
+                if ($env:REVIEW_TEST_SCENARIO -eq 'skipped-proof') { $outcome = 'NotExecuted' }
+                Set-Content -LiteralPath (Join-Path $proofDirectory 'transaction-tests.trx') -Value "<TestRun><Results><UnitTestResult testName='authcraft_api.Tests.LocalEnvironmentSqlTests.TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage' outcome='$outcome'/></Results><ResultSummary><Counters total='1' executed='1' passed='1' failed='0'/></ResultSummary></TestRun>"
+                if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-tool-proof') { $proof.sqlpackage_sha256 = '{{new string('b', 64)}}' }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-version-proof') { $proof.sqlpackage_version = '170.5.96.0' }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-source-proof') { $proof.postdeployment_sha256 = '{{new string('b', 64)}}' }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'missing-case-proof') { $proof.cases = @($cases | Select-Object -First 5) }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-state-proof') { $proof.cases[-1].state = @(1, 1, 1, 1, 1) }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'changed-sql-proof') { Add-Content (Join-Path $proofDirectory 'protected-51000.sql') -Value 'changed' }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'duplicate-case-proof') { $proof.cases[-1] = $proof.cases[0] }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'missing-trx-proof') { Remove-Item -LiteralPath (Join-Path $proofDirectory 'transaction-tests.trx') }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-boundaries-proof') {
+                    $sqlPath = Join-Path $proofDirectory 'protected-51000.sql'
+                    Set-Content -LiteralPath $sqlPath -Value "SET XACT_ABORT ON;`nBEGIN TRANSACTION;`nCOMMIT TRANSACTION;`nINSERT dbo.transaction_seeds (id) VALUES (2);"
+                    $proof.cases[-1].sql_sha256 = (Get-FileHash $sqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+                $proof | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $parameters.TransactionVerificationPath -Encoding UTF8
+                if ($env:REVIEW_TEST_SCENARIO -eq 'missing-proof') { Remove-Item -LiteralPath $parameters.TransactionVerificationPath }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'invalid-proof') { Set-Content -LiteralPath $parameters.TransactionVerificationPath -Value '{' }
                 if ($env:REVIEW_TEST_SCENARIO -eq 'evaluate-unvalidated-check') { $parameters.Mode = 'Evaluate' }
                 if ($env:REVIEW_TEST_SCENARIO -eq 'reviewer-override') { $parameters.AllowedReviewer = 'other-user' }
                 & '{{publisherPath}}' @parameters
@@ -348,6 +485,7 @@ public sealed class DatabaseDeploymentReviewTests
         public string SchemaStatePath { get; }
         public string ReviewedReportPath { get; }
         public string ReviewedScriptPath { get; }
+        public string AttemptPath { get; }
         private string ValidationSqlPath { get; }
 
         public string[] SnapshotProtectedFiles()

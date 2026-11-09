@@ -10,6 +10,14 @@
 
 ## Clarifications
 
+### Session 2026-11-09
+
+- Decision: admitir fases separadas de esquema DacFx y postdeploy transaccional,
+  manteniendo `IncludeTransactionalScripts=True`. No exigir rollback global de
+  esquema/postdeploy: ante fallo del segundo, revertir sus semillas/validaciones,
+  bloquear API/promocion y tratar el esquema confirmado como parcial hasta
+  inspeccion y recuperacion explicitas. No autoriza publicar ni restaurar datos.
+
 ### Session 2026-11-07
 
 - Q: ¿Qué esperás que ocurra con `docs/production-release-checklist.md` en cada despliegue de Production: que sea una guía fija para completar, que Actions genere un informe descargable por ejecución, o que Actions actualice y suba ese mismo archivo al repositorio? → A: Mantener una checklist fija en `docs/` y generar por cada ejecución un informe descargable como artefacto de GitHub Actions; no sobrescribir ni hacer commits automáticos del archivo.

@@ -5,6 +5,11 @@ Development fue validado en LocalDB; no se conectó Azure SQL durante esa valida
 
 ## Prerrequisitos y límites
 
+Actualizacion 2026-11-09: `IncludeTransactionalScripts=True` esta implementado
+en evaluacion, reevaluacion y Publish del inicializador/publicador. El postdeploy
+tiene transaccion propia verificada en LocalDB, no rollback global del esquema.
+Antes de publicar seguir los gates de [transacciones](#validacion-transaccional-por-fases).
+
 - PowerShell, Git Bash, .NET 10, MSBuild con SSDT y SqlPackage disponibles.
 - SQL Server local/LocalDB y base local dedicada; credenciales sintéticas protegidas.
 - Acceso autorizado a GitHub/Azure. No listar valores de secretos.
@@ -13,6 +18,86 @@ Development fue validado en LocalDB; no se conectó Azure SQL durante esa valida
 - Production sigue bloqueado; no intentar publicaciones manuales alternativas.
 - Consultar [contrato](contracts/environment-deployment.md) y
   [estados](data-model.md) para salidas, identidad y condiciones de bloqueo.
+
+## Validacion transaccional por fases
+
+El diseno esta implementado y verificado localmente con SqlPackage 170.4.53.0 y
+170.5.96.0. La seleccion final paso 101 pruebas sin omisiones; incluye el DACPAC
+real, gate sobre SQL generado y rechazo de transaccion ajena con 51001 antes de
+escribir. T068 agrega evidencia de DeploymentAttempt y pruebas del resumen de
+Actions; la nueva seleccion local suma 121 pruebas aprobadas sin omisiones.
+T069–T070 (evidencia y revision remotas) siguen pendientes.
+Este procedimiento no ejecuta ni autoriza Publish en Azure.
+
+1. Construir el DACPAC con el comando MSBuild de esta guia. Verificar que ambos
+   scripts usen `IncludeTransactionalScripts=True` para DeployReport, Script,
+   reevaluacion y Publish, sin diferencias de opciones.
+2. Ejecutar los ensayos del fixture LocalDB:
+
+   ```powershell
+   $env:AUTHCRAFT_LOCAL_ENVIRONMENT_SQL_CONNECTION = 'Server=(localdb)\MSSQLLocalDB;Database=authcraft_development;Integrated Security=True;TrustServerCertificate=True'
+   dotnet test .\authcraft-api.Tests\authcraft-api.Tests.csproj --configuration Release --filter "FullyQualifiedName~LocalEnvironmentSqlTests|FullyQualifiedName~DatabaseDeploymentReviewTests|FullyQualifiedName~DeploymentRecoveryTests"
+   ```
+
+   No contar tests omitidos ni confundir exito de la suite con atomicidad global.
+   Los escenarios publican baseline/delta en bases descartables y provocan
+   separadamente 547 y 51000, con control sin proteccion y postdeploy protegido.
+3. Conservar evidencia de limites transaccionales y herramienta exacta; desde
+   otra conexion comprobar columnas, constraints/trust, semillas y datos previos.
+   Conservar el ensayo original como evidencia de falta de atomicidad global.
+   En nuevos escenarios con postdeploy protegido exigir rollback de sus semillas
+   y cambios de trust en ambos fallos y constraints confiables en exito.
+   El esquema confirmado por DacFx puede permanecer; registrar estado parcial.
+   Bloquear si el COMMIT dentro del postdeploy precede al guard o quedan escrituras
+   de esa fase. Un exit code de error no demuestra rollback.
+4. Generar DeployReport/Script de Staging con la opcion, solo con autorizacion
+   para conectar. Verificar la cobertura y que el gate acepte el SQL real sin
+   permitir SQL arbitrario posterior. No editar artefactos generados.
+5. Obtener revision autenticada con `include_transactional_scripts=true`,
+   `postdeploy_transaction=true` y hashes
+   nuevos. El run `42692449745` y sus revisiones previas no acreditan esta opcion.
+   Hasta completar estos gates, no ejecutar el workflow de reanudacion.
+
+La reanudacion ahora ejecuta la prueba exacta de fases en LocalDB antes de OIDC,
+con el mismo SqlPackage que usara para publicar. Conserva seis SQL sinteticos,
+JSON de prueba y TRX; evidencia ausente, omitida o que no coincida con la
+herramienta/fuentes actuales bloquea Publish. No reconstruye los paquetes candidatos.
+Para reproducir solamente esa prueba con evidencia local en un directorio nuevo:
+
+```powershell
+$env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY = Join-Path $env:TEMP ('authcraft-phase-evidence-' + [Guid]::NewGuid().ToString('N'))
+# Mantener SQLPACKAGE_PATH apuntando al mismo ejecutable que usara el publicador.
+if ([string]::IsNullOrWhiteSpace($env:SQLPACKAGE_PATH) -or -not (Test-Path -LiteralPath $env:SQLPACKAGE_PATH -PathType Leaf)) {
+  throw 'Configurar SQLPACKAGE_PATH con la ruta del SqlPackage instalado.'
+}
+dotnet test .\authcraft-api.Tests\authcraft-api.Tests.csproj --configuration Release `
+  --filter 'FullyQualifiedName=authcraft_api.Tests.LocalEnvironmentSqlTests.TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage' `
+  --logger 'trx;LogFileName=transaction-tests.trx' --results-directory $env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY
+if ($LASTEXITCODE -ne 0) { throw 'Fallo la prueba de fases.' }
+Import-Module .\scripts\DeploymentReview.psm1 -Force
+Get-DeploymentTransactionVerification `
+  -Path (Join-Path $env:AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY 'transaction-verification.json') `
+  -SqlPackagePath $env:SQLPACKAGE_PATH
+```
+
+El directorio debe estar fuera del repositorio; no reutilizar prueba de otras
+fuentes ni editar sus SQL. La ruta de Actions guarda `sql-attempt.json` antes y
+despues de Publish, y un `deployment-attempt.json` agregado incluso tras fallos.
+Solo registro/upload usan always(); API/smoke no continuan tras fallo SQL.
+El artefacto `staging-deployment-attempt` retiene esos archivos y los report/script
+de evaluacion/reevaluacion durante 30 dias con el acceso del repositorio.
+postdeploy_result=unknown exige inspeccion independiente, no implica fallo ni
+rollback; un exit code cero tampoco lo convierte automaticamente en committed.
+Una caida total del runner puede dejar evidencia no disponible.
+
+Ver [contrato transaccional](contracts/environment-deployment.md#cobertura-transaccional-requerida)
+y [diseno](plan.md#diseno-transaccional-y-fallos-de-constraints). No se promete una
+transaccion que abarque conjuntamente SQL y el despliegue de la API.
+
+Ante fallo del postdeploy: detener API/smoke/promocion, inspeccionar el esquema
+desde otra conexion y confirmar que la API previa sigue compatible. No eliminar
+columnas, deshabilitar constraints ni corregir datos automaticamente. Resolver la
+causa con autorizacion, reevaluar y volver a revisar hashes/impacto antes de reintentar.
 
 ## 1. Revisar inventario, sin cambios
 

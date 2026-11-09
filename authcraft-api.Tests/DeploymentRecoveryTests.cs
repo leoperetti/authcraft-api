@@ -6,6 +6,24 @@ namespace authcraft_api.Tests;
 
 public sealed class DeploymentRecoveryTests
 {
+    [Fact]
+    public void StagingDeployment_DoesNotContinueApiOrSmokeAfterSqlFailure()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), ".github", "workflows", "deploy_authcraft-api-staging.yml"));
+        var publishIndex = workflow.IndexOf("- name: Publish the reviewed Staging database plan", StringComparison.Ordinal);
+        Assert.True(publishIndex >= 0);
+        var evidenceIndex = workflow.IndexOf("- name: Record Staging deployment attempt", StringComparison.Ordinal);
+        Assert.True(evidenceIndex > publishIndex);
+        var deploymentSteps = workflow[publishIndex..evidenceIndex];
+        Assert.DoesNotContain("continue-on-error:", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("if:", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("always()", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("throw 'The reviewed Staging database deployment failed.'", deploymentSteps, StringComparison.Ordinal);
+        Assert.DoesNotContain("RESTORE DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("report")]
     [InlineData("script")]
@@ -46,6 +64,7 @@ public sealed class DeploymentRecoveryTests
         var result = sandbox.RunDatabaseDeployment(failureStage: "", mode: "Publish");
 
         Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("authenticated deployment review", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(
             ["/Action:DeployReport", "/Action:Script"],
             File.ReadAllLines(sandbox.SqlPackageLogPath));
@@ -88,7 +107,8 @@ public sealed class DeploymentRecoveryTests
             File.WriteAllText(_apiPackagePath, "synthetic-api-package");
             File.WriteAllText(_productionVersionPath, new string('b', 40));
             File.WriteAllText(_recentWritesPath, "synthetic-recent-write-must-be-preserved");
-            File.WriteAllText(_sqlPackagePath, """
+            var postdeploymentPath = Path.Combine(FindRepositoryRoot(), "authcraft-db", "postdeploys", "Script.PostDeployment.sql");
+            File.WriteAllText(_sqlPackagePath, $$"""
                 $action = @($args | Where-Object { $_ -like '/Action:*' })[0]
                 [IO.File]::AppendAllText($env:AUTHCRAFT_SQLPACKAGE_TEST_LOG, "$action`n")
                 if ($env:AUTHCRAFT_SQLPACKAGE_TEST_FAILURE -eq 'report' -and $action -eq '/Action:DeployReport') {
@@ -103,7 +123,10 @@ public sealed class DeploymentRecoveryTests
                 }
                 if ($action -eq '/Action:Script') {
                     $output = @($args | Where-Object { $_ -like '/DeployScriptPath:*' })[0].Substring('/DeployScriptPath:'.Length)
-                    [IO.File]::WriteAllText($output, 'CREATE TABLE dbo.synthetic_test (id INT);')
+                    $postdeployment = Get-Content -LiteralPath '{{postdeploymentPath}}' -Raw -Encoding UTF8
+                    $constraints = Get-Content -LiteralPath (Join-Path (Split-Path '{{postdeploymentPath}}') 'ValidateConstraints.sql') -Raw -Encoding UTF8
+                    $postdeployment = $postdeployment.Replace(':r .\ValidateConstraints.sql', $constraints)
+                    [IO.File]::WriteAllText($output, "CREATE TABLE dbo.synthetic_test (id INT);`nGO`n$postdeployment`nGO`n")
                 }
                 """);
 
@@ -185,17 +208,17 @@ public sealed class DeploymentRecoveryTests
         {
             Directory.Delete(DirectoryPath, recursive: true);
         }
+    }
 
-        private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "authcraft-api.slnx")))
         {
-            var directory = new DirectoryInfo(AppContext.BaseDirectory);
-            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "authcraft-api.slnx")))
-            {
-                directory = directory.Parent;
-            }
-
-            return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+            directory = directory.Parent;
         }
+
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
     }
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);

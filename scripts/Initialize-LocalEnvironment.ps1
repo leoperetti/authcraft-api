@@ -76,7 +76,9 @@ $commonArguments = @(
     "/TargetDatabaseName:$TargetDatabaseName",
     '/TargetTrustServerCertificate:True',
     '/p:BlockOnPossibleDataLoss=True',
-    '/p:DropObjectsNotInSource=False'
+    '/p:DropObjectsNotInSource=False',
+    '/p:ScriptDatabaseOptions=False',
+    '/p:IncludeTransactionalScripts=True'
 )
 
 & $SqlPackagePath /Action:DeployReport @commonArguments "/OutputPath:$reportPath"

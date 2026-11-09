@@ -1,6 +1,6 @@
 # Implementation Plan: Separación y verificación de ambientes
 
-**Branch**: `main` | **Date**: 2026-11-07 | **Spec**: [spec.md](spec.md)
+**Branch**: `main` | **Date**: 2026-11-09 | **Spec**: [spec.md](spec.md)
 
 **Input**: `specs/001-environment-separation/spec.md` y nombres Azure confirmados por el usuario.
 
@@ -20,6 +20,21 @@ conexiones o ejecutar el bootstrap y reconciliar los dos workflows remotos.
 Mantener el proyecto SQL existente: construir con MSBuild, evaluar el DACPAC y
 publicar únicamente cambios compatibles con la aplicación anterior y candidata.
 No introducir migraciones EF ni modificar contratos de negocio.
+
+Actualizacion de diseno 2026-11-09: exigir `IncludeTransactionalScripts=True`
+explicitamente en DeployReport, Script, reevaluacion y Publish, tanto en el
+inicializador local como en el publicador remoto. La opcion no acredita una
+transaccion global: antes de publicar, inspeccionar sus limites y ensayar fallos
+de validacion/postdeploy contra LocalDB descartable. El codigo actual y el run
+`42692449745` todavia no implementan esta decision; no reutilizar sus hashes como
+aprobacion del plan transaccional.
+
+Revision posterior autorizada: los ensayos con SqlPackage 170.4.53 y 170.5.96
+confirmaron COMMIT anterior al postdeploy. El requisito vigente admite dos fases,
+sin atomicidad global: esquema DacFx y postdeploy con transaccion propia.
+Esta decision sustituye el criterio anterior de baseline completa intacta.
+La implementacion debe demostrar rollback del postdeploy y recuperacion explicita
+del esquema parcial antes de habilitar una publicacion.
 
 Esta fase solamente consulta metadatos y genera documentación. No asigna permisos,
 configura secretos, despierta bases pausadas, publica código ni crea recursos.
@@ -84,6 +99,7 @@ tiene una identidad asignada por sistema. No se modifican recursos de CEKIDE.
 | VI. Nombres | PASS: variables descriptivas en código y scripts futuros. |
 | VII. Repositorios | PASS: las operaciones de datos de prueba usan servicios/repositorios existentes; la salud SQL no consulta tablas de negocio. No se refactorizan repositorios ajenos. |
 | VIII. Production protegido | PASS: checklist fija y reporte por ejecución son documentación/evidencia solamente; no habilitan workflows ni sustituyen aprobación o gates. |
+| IX. Evidencia e integridad SQL | PASS de diseno: opcion transaccional explicita, limites verificables, validacion de datos existentes y ensayo de fallos; nuevos hashes/revision antes de Publish. Ejecucion pendiente, no atomicidad acreditada. |
 
 No hay excepciones constitucionales. Diseño listo para tareas; **habilitación de
 production bloqueada**, no requisito satisfecho. La feature completa no puede
@@ -240,7 +256,8 @@ salud, aislamiento SQL ni compatibilidad del esquema.
    el procedimiento de recuperación (T044), aunque sea una tarea de US4.
 6. Para cambios compatibles, publicar esquema antes de aplicación; esto permite que
    el bootstrap de la candidata encuentre su esquema. Mantener
-   `BlockOnPossibleDataLoss=True` y `DropObjectsNotInSource=False`. Verificar que
+   `BlockOnPossibleDataLoss=True`, `DropObjectsNotInSource=False`,
+   `ScriptDatabaseOptions=False` e `IncludeTransactionalScripts=True`. Verificar que
    opciones son idénticas en evaluación y publicación y reevaluar si cambia el destino.
 7. Publicar API staging, verificar salud/versionado, login de prueba y lectura de roles
    de ese tenant; verificar rechazo del token staging bajo la configuración production
@@ -271,6 +288,65 @@ salud, aislamiento SQL ni compatibilidad del esquema.
 
 ### Validación y recuperación
 
+#### Diseno transaccional y fallos de constraints
+
+- Agregar la opcion al conjunto compartido de argumentos de
+  `scripts/Invoke-DatabaseDeployment.ps1` y
+  `scripts/Initialize-LocalEnvironment.ps1`, sin flag de bypass ni valores distintos
+  entre evaluacion, reevaluacion y publicacion.
+- Extender el contrato de revision autenticada con
+  `include_transactional_scripts=true` y `postdeploy_transaction=true`: ausencia, duplicacion o valor distinto
+  bloquea. Actualizar fixtures, parser, pruebas y documentacion juntos; las
+  revisiones anteriores no acreditan esta opcion.
+- Inspeccionar el SQL de la version exacta de SqlPackage usada por Actions:
+  `BEGIN TRANSACTION`, `COMMIT`, manejo de errores y `XACT_ABORT`; determinar si
+  el postdeploy y las siete validaciones quedan dentro o fuera de la transaccion.
+  No inferir cobertura por encontrar un BEGIN aislado ni por la opcion True.
+- `WITH CHECK CHECK CONSTRAINT` puede fallar con SQL 547 antes del guard
+  `THROW 51000`; ambos caminos deben probarse. THROW sin una transaccion activa
+  y un manejo de errores apropiado no deshace instrucciones ya confirmadas.
+- En LocalDB descartable, publicar una baseline con datos sinteticos, generar el
+  delta transaccional e inducir por separado un fallo 547 y uno 51000 en fixtures
+  aislados. Ejecutar mediante SqlPackage Publish, no solo SQL manual; comprobar
+  desde otra conexion el esquema, columnas, constraints/trust, semillas postdeploy,
+  datos preexistentes y ausencia de cambios API. Comparar estado anterior/posterior.
+  Incluir un camino exitoso con todas las constraints revisadas confiables.
+- Conservar el ensayo sin proteccion como evidencia de la limitacion DacFx.
+  Agregar escenarios separados del postdeploy protegido, sin convertir el ensayo
+  anterior en una prueba aprobada de atomicidad global.
+- Versionar en `authcraft-db/postdeploys/Script.PostDeployment.sql` una transaccion
+  propia con SET XACT_ABORT ON, BEGIN TRY/BEGIN TRANSACTION, semillas idempotentes,
+  inclusion de ValidateConstraints.sql y COMMIT solo despues de validar todo.
+  En CATCH revertir si XACT_STATE() indica transaccion activa y relanzar con THROW,
+  preservando el error original. No incluir GO dentro de TRY/CATCH ni editar
+  artefactos generados. No envolver la transaccion interna de DacFx.
+- El postdeploy debe entrar con @@TRANCOUNT=0; si la herramienta cambia esa
+  condicion, fallar antes de insertar/validar y bloquear por cobertura no revisada.
+  Se permite el COMMIT de esquema anterior a esta fase. Se prohibe un COMMIT
+  dentro del postdeploy antes del guard, o escrituras fuera de su unidad protegida.
+- Ante 547/51000 comprobar que semillas y cambios de confianza realizados por el
+  postdeploy se revierten al estado de entrada a esa fase; columnas y constraints
+  creadas por DacFx pueden permanecer. Conservar datos previos, registrar el estado
+  parcial, impedir API/smoke/promocion y revisar compatibilidad de la API anterior.
+  Resolver datos invalidos solo con autorizacion; reevaluar y revisar hashes antes
+  de reintentar el mismo release. No eliminar columnas ni restaurar automaticamente.
+- Adaptar el gate conservador de SQL al cierre transaccional real identificado,
+  con pruebas positivas del SQL generado y negativas de COMMIT anticipado dentro del postdeploy,
+  validaciones fuera de cobertura, bloque modificado y SQL arbitrario posterior.
+  No relajar el gate con expresiones que acepten cualquier cierre transaccional.
+- Reevaluar Staging solo en DeployReport/Script con la opcion, conservar version
+  de herramientas y hashes nuevos, y obtener revision autenticada antes de Publish.
+  El ensayo LocalDB no sustituye evidencia del motor Azure ni permisos revisados.
+
+Criterio post-diseno: principios I-IX conservados. La transaccion propia del
+postdeploy no es rollback destructivo del esquema y no sustituye revision de
+compatibilidad, confianza final ni recuperacion del estado parcial. Implementacion
+local y ensayos del diseno revisado verificados con SqlPackage 170.4.53.0 y
+170.5.96.0. DeploymentAttempt integrado localmente con prueba ejecutada por el
+runner, version/hash de herramienta/fuentes, SQL/TRX y estados conservadores;
+evaluacion y revision remotas pendientes.
+No hay autorizacion remota.
+
 Pruebas de configuración, JWT cruzado, secretos faltantes, salud, manifiesto,
 referencia no autorizada y release superado. Prueba local con DACPAC real y las
 pruebas SQL del fixture. Staging con datos sintéticos, sin signup/invitaciones/reset
@@ -294,3 +370,7 @@ y autorización; nunca restaurar encima de datos actuales automáticamente.
 - La API de production sigue en su estado actual durante el plan. Bloquear futuras
   publicaciones exige acciones de implementación autorizadas; no se ejecutaron ahora.
 - No completar la feature con solo development/staging: FR-012 y SC-003 siguen pendientes.
+- Revision post-diseno: principios I-IX satisfechos por el diseno, sin excepciones.
+  La implementacion local por fases, DeploymentAttempt y sus ensayos pasan;
+  generar nueva evidencia del runner y obtener revision exacta siguen como gates
+  pendientes. No hay promesa de atomicidad global ni autorizacion de Publish.

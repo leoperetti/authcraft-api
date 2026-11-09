@@ -43,6 +43,48 @@ Hash distinto, versión superada o evidencia staging de otro release invalida pr
 
 ## DeploymentAttempt
 
+Extension implementada localmente 2026-11-09, sin tablas nuevas:
+
+- `include_transactional_scripts`: debe ser true en las opciones revisadas.
+- `postdeploy_transaction`: true solo tras verificar el bloque versionado exacto.
+  Ambos campos pueden ser null si el intento se detuvo antes del publicador;
+  no significa que se ejecutaron opciones falsas ni que haya cobertura acreditada.
+- `transaction_scope`: unverified | schema_only | separate_schema_and_postdeploy;
+  describe evidencia de cobertura, no el valor de la opcion.
+- `transaction_verification_reference`: SQL/hash, version de SqlPackage, limites
+  observados y referencia a ensayos de exito/fallos 547 y 51000.
+- `failure_state_verification`: pending | unchanged | partial | unknown;
+  se determina por inspeccion del estado, nunca por el exit code solamente.
+
+Publicacion bloqueada si no se demuestra la transaccion propia completa del
+postdeploy ademas del alcance DacFx documentado. separate_schema_and_postdeploy
+no representa una transaccion global: tras un fallo del postdeploy, el estado
+global puede ser partial aunque esa fase haya revertido sus propios cambios.
+Agregar `postdeploy_result`: pending | committed | rolled_back | unknown,
+determinado por evidencia independiente; no inferir rolled_back del exit code.
+Un fallo marca failed y detiene API/promocion; no implica que unchanged
+sea cierto ni autoriza rollback/restauracion. Ningun campo adicional acredita
+aprobacion por si solo.
+
+En la ruta de reanudacion Staging, el runner ejecuta la prueba LocalDB exacta
+antes de OIDC y conserva seis SQL sinteticos, JSON de prueba y TRX. El publicador
+valida la unica prueba ejecutada/aprobada, los seis estados esperados, hashes de
+SQL/herramienta/fuentes y version actual de SqlPackage antes de Publish. La
+referencia conserva esos hashes, limites de cada fixture, hash del SQL de destino
+y linea inicial del postdeploy. El booleano de la opcion no sustituye esa prueba.
+
+El publicador guarda `sql-attempt.json` antes de invocar Publish y al finalizar,
+tambien ante error. Tras iniciar Publish, postdeploy_result queda unknown hasta
+inspeccion independiente, incluso con exit code cero; un error deja
+failure_state_verification=unknown y nunca rolled_back/unchanged automaticamente.
+El resumen agregado de Actions preserva `deployment-attempt.json`; API/smoke
+omitidos quedan not_executed. Si el smoke combinado falla, salud/autenticacion
+individuales quedan unknown porque no se acredita cual llego a ejecutarse.
+El artefacto `staging-deployment-attempt` retiene JSON, TRX y SQL durante 30 dias,
+con los permisos de acceso del repositorio. La retencion no autoriza el despliegue.
+Si el runner se pierde antes de guardar/subir evidencia, el estado sigue
+desconocido y requiere inspeccion; no hay garantia de captura tras una caida total.
+
 - `release`, `target_environment`, `started_at`, `finished_at`.
 - `preflight_result`, `schema_report_reference`, `schema_result`, `application_result`,
   `health_result`, `authentication_result`.

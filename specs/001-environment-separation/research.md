@@ -1,5 +1,72 @@
 # Research: Separación y verificación de ambientes
 
+## Actualizacion 2026-11-09: transacciones DacFx y fail-fast
+
+**Revision vigente autorizada**: tras el fallo del ensayo, el usuario eligio
+"Revisar el requisito para admitir fases separadas, con postdeploy transaccional
+y recuperacion explicita del esquema parcial".
+La exigencia de atomicidad global de la primera decision queda sustituida.
+
+**Decision revisada**: mantener True para el esquema DacFx; dar al postdeploy
+versionado una transaccion propia que incluya semillas, siete validaciones y guard.
+Comprobar entrada sin transaccion, XACT_ABORT, TRY/CATCH, rollback condicional y
+rethrow. Un COMMIT DacFx anterior al postdeploy es esperado; no un criterio de
+rechazo por si solo. Un COMMIT prematuro dentro del postdeploy sigue bloqueando.
+
+**Evidence obtenida**: T062 con ambas versiones confirma esquema y semilla
+persistentes tras 547/51000 sin proteccion propia. Ese resultado no se oculta ni
+se reclasifica como rollback global; se usara como control de la regresion.
+
+**Aceptacion revisada**: nuevos ensayos deben comprobar que el postdeploy
+protegido revierte sus propias escrituras/cambios de trust, no el esquema ya
+confirmado. Bloquear API/promocion tras fallo y registrar columnas/constraints
+persistentes, datos conservados e intervencion requerida. El reintento exige
+inspeccion, permisos y nueva revision si cambia el plan o los datos.
+
+**Alternatives considered**: transaccion global envolvente/edicion del SQL
+generado descartadas; aceptar postdeploy parcialmente aplicado tambien descartado.
+La separacion elegida conserva el limite real de DacFx y protege la unidad
+postdeploy sin prometer rollback del esquema.
+
+Los parrafos siguientes documentan la decision inicial y su ensayo, no el
+criterio vigente que acaba de revisarse.
+
+**Decision**: Adoptar explicitamente `IncludeTransactionalScripts=True` para
+DeployReport/Script/reevaluacion/Publish local y remoto. Exigir el mismo valor en
+la revision autenticada y verificar la cobertura real antes de habilitar Publish.
+
+**Evidence**: El publicador actual no pasa la propiedad. La ayuda de SqlPackage
+170.5.96 y la referencia oficial indican default False y describen True como
+usar instrucciones transaccionales "where possible", no como atomicidad global.
+El SQL original del run `42692449745` no contiene BEGIN TRANSACTION, COMMIT ni
+SET XACT_ABORT ON. El guard 51000 se ejecuta despues de las siete validaciones;
+una de ellas puede fallar antes con 547, dejando cambios previos aplicados si no
+estan cubiertos por una transaccion que se revierta.
+
+**Rationale**: El fail-fast bloquea etapas posteriores, pero no equivale a rollback.
+La opcion reduce exposicion donde DacFx la soporta; el alcance debe demostrarse
+inspeccionando limites y estado desde otra conexion despues de fallos inducidos.
+La ubicacion del COMMIT respecto del postdeploy es un criterio de aceptacion,
+no una suposicion. XACT_ABORT y THROW deben evaluarse dentro del manejo real de
+errores de SqlPackage; no se insertan manualmente en el artefacto.
+
+**Alternatives considered**: Conservar False se descarta para el nuevo diseno.
+Asumir que True revierte todo, envolver ciegamente el script en otra transaccion,
+editar el SQL descargado o agregar rollback destructivo automatico se descartan.
+Si el postdeploy queda fuera de cobertura, detener la publicacion y revisar un
+diseno especifico; no presentar el caso parcial como exitoso.
+
+**Verification required**: Ensayos LocalDB con baseline/delta sinteticos y Publish
+real: exito, fallo 547 de datos existentes y fallo 51000 del guard en fixture.
+Verificar columnas/constraints/trust, semillas y datos previos tras cada fallo,
+registrar limites transaccionales y herramienta exacta y bloquear ante cobertura
+insuficiente. Son pruebas pendientes de implementacion, no resultados obtenidos.
+No se requiere otra decision de usuario para aplicar la opcion; cualquier
+alternativa necesaria tras un resultado negativo requiere revision antes de Publish.
+
+**Source**: [SqlPackage Publish properties](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-publish)
+(`IncludeTransactionalScripts`, default False, transactional statements where possible).
+
 **Fecha**: 2026-11-05
 **Alcance**: lecturas locales, ARM y metadatos GitHub; sin valores de secretos,
 conexiones SQL ni cambios de recursos. Consulta de documentación oficial separada

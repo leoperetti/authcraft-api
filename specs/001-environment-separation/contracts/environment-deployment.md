@@ -116,12 +116,90 @@ DeployReport/Script y Publish usan mismas opciones:
 `BlockOnPossibleDataLoss=True`, `DropObjectsNotInSource=False` y
 `ScriptDatabaseOptions=False` para no alterar opciones de la base destino ni
 requerir permisos `ALTER DATABASE` por diferencias ajenas al esquema del DACPAC.
+Decision de diseno 2026-11-09: agregar explicitamente
+`IncludeTransactionalScripts=True` en todas esas acciones y en el inicializador
+local. Implementado y verificado localmente; el run `42692449745` no utiliza esta opcion.
+La revision autenticada debe exigir ademas exactamente una linea
+`include_transactional_scripts=true`; ausencia, duplicacion o valor distinto
+bloquea. No aceptar revisiones anteriores como acreditacion de esta propiedad.
 El registro autenticado de revisión debe incluir exactamente
 `script_database_options=false` junto con las demás opciones y hashes; una opción
 ausente o distinta invalida la aprobación.
 Compatible significa que API anterior y candidata pueden operar con el esquema
 resultante, incluidos postdeploy y cambios dependientes de datos.
 Cambios destructivos/contractivos no pasan el flujo automático.
+
+### Cobertura transaccional requerida
+
+True significa transacciones donde DacFx las admite, no garantia global.
+Antes de Publish, verificar en el SQL generado por la herramienta exacta los
+limites BEGIN/COMMIT y el manejo de errores/XACT_ABORT, incluida la posicion del
+postdeploy y sus validaciones. Fallo SQL 547 en WITH CHECK CHECK y THROW 51000 del
+guard deben bloquear API/promocion y tener ensayos independientes de Publish en
+LocalDB descartable con comparacion de esquema/datos desde otra conexion.
+
+Decision revisada: se admiten fases separadas, no atomicidad global. El postdeploy
+versionado debe tener transaccion propia con entrada @@TRANCOUNT=0, XACT_ABORT ON,
+TRY/CATCH y rollback condicional a XACT_STATE(), relanzando el error original.
+Debe incluir todas las semillas y validaciones; COMMIT solo despues del guard.
+El COMMIT de esquema DacFx antes del postdeploy es admisible y debe documentarse.
+
+Los ensayos 547/51000 deben demostrar rollback de semillas y cambios de trust
+realizados por el postdeploy frente a su estado de entrada. Esquema confirmado
+antes de esa fase puede permanecer; no exigir baseline global intacta ni
+llamar al resultado unchanged por revertir solo postdeploy. El camino exitoso
+debe conservar todas las constraints revisadas confiables.
+Exigir ademas `postdeploy_transaction=true` en la revision autenticada, exactamente
+una vez junto con `include_transactional_scripts=true`; revisiones anteriores
+no acreditan el nuevo diseno. Un COMMIT prematuro dentro del postdeploy,
+transaccion ajena activa o evidencia insuficiente bloquean.
+El gate de SQL solo podra aceptar cierres transaccionales
+identificados y probados, sin permitir SQL arbitrario despues de la validacion.
+Cambiar opciones o limites invalida la revision previa y exige nuevos report/script,
+hashes y revision autenticada. Ante cualquier fallo operativo seguir tratando el
+estado como parcial/desconocido hasta inspeccion; no hay rollback SQL destructivo
+automatico ni garantia sobre una transaccion que incluya tambien el despliegue API.
+
+### Evidencia transaccional del intento Staging
+
+Antes de OIDC, la ruta de reanudacion ejecuta en LocalDB la prueba exacta
+`TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage`.
+No reconstruye ni reemplaza los paquetes candidatos: solo construye el harness
+y sus DACPACs sinteticos descartables. Usa el SqlPackage que despues recibira el
+publicador, descubierto en una instalacion Visual Studio con SSDT.
+
+El test emite seis SQL originales y `transaction-verification.json` solo tras
+comprobar todos los escenarios; `transaction-tests.trx` debe acreditar exactamente
+una prueba ejecutada/aprobada y ninguna omitida/fallida. El publicador requiere
+`TransactionVerificationPath`, verifica version actual y hash del ejecutable,
+hashes de postdeploy/validaciones/fixture, seis casos unicos con sus vectores
+esperados y limites de transaccion, y los hashes de sus SQL. Evidencia ausente,
+omitida, alterada, de otra herramienta/fuente o insuficiente bloquea Publish.
+No se acepta `schema_only` ni un parametro booleano como sustituto de cobertura.
+
+`AttemptPath` conserva un JSON por intento (ruta nueva, sin sobrescribir evidencia
+anterior); por defecto el publicador genera un nombre unico junto a su evidencia SQL.
+Guarda una instantanea pending antes de Publish y la actualiza en finally:
+blocked antes de escribir, failed ante fallo de publicacion, succeeded solo para
+la fase SQL completada. Incluye tiempos UTC, release/destino, hashes del DACPAC y
+plan, opciones, transaction_scope, postdeploy_result, failure_state_verification,
+referencia de prueba, causa/accion sanitizadas y etapas posteriores not_executed.
+No copia diagnosticos nativos, tokens ni cadenas de conexion.
+
+La referencia vincula el hash del plan real y la linea inicial del postdeploy con
+los hashes/TRX/herramienta/limites de los ensayos. Esta evidencia acredita cobertura
+probada por fases, no el estado posterior de Azure. Tras intentar Publish,
+postdeploy_result permanece unknown hasta inspeccion independiente, incluso si
+SqlPackage devuelve cero; ante fallo, failure_state_verification es unknown,
+nunca unchanged o rolled_back inferidos. Sin intento SQL, queda pending.
+
+Solo los pasos de registro y upload usan always(); SQL, API y smoke conservan
+su condicion de exito. El registro agregado distingue fallos/bloqueos y etapas
+omitidas, preserva la evidencia SQL y no convierte un fallo SQL en rollback.
+`staging-deployment-attempt` se guarda por run durante 30 dias con el acceso del
+repositorio; una caida total del runner puede impedir captura/upload y obliga a
+tratar la evidencia como no disponible. El mecanismo no activa el workflow,
+no concede permisos ni sustituye revision autenticada/autorizacion remota.
 
 ### Evidencia de revisión de compatibilidad
 

@@ -6,6 +6,51 @@ para sustituir un paquete validado.
 
 ## Diagnostico por etapa
 
+### Fases SQL separadas: proteccion local verificada
+
+Decision autorizada tras el ensayo LocalDB del 2026-11-09: conservar
+IncludeTransactionalScripts=True para DacFx y dar al postdeploy una transaccion
+propia que incluya semillas, validaciones y guard. No se promete rollback global.
+El postdeploy versionado implementa esa proteccion: rechaza @@TRANCOUNT distinto
+de cero con 51001 antes de escribir, usa XACT_ABORT/TRY/CATCH y revierte su propia
+transaccion antes de relanzar el error. El inicializador y el publicador pasan
+IncludeTransactionalScripts=True en todas las acciones.
+
+El ensayo LocalDB con SqlPackage 170.4.53.0 y 170.5.96.0 comprobo exito y fallos
+547/51000 desde otra conexion: en los fallos protegidos no persiste la semilla ni
+la confianza adquirida por el postdeploy; la columna y el check de la fase DacFx
+si permanecen. El control sin proteccion conserva esos efectos, por lo que no
+demuestra atomicidad global. El ensayo no verifica el estado remoto de Staging.
+
+Si falla con 547/51000, detener API/smoke/promocion. Inspeccionar desde otra
+conexion columnas/constraints aplicadas por DacFx, estado de confianza, semillas y
+datos previos. Confirmar por evidencia si la unidad postdeploy revirtio; el esquema
+puede permanecer aunque esa fase haya revertido todo. Mantener el estado global
+partial/unknown hasta inspeccion y comprobar compatibilidad de la API previa.
+No escribir postdeploy_result=rolled_back ni failure_state_verification=unchanged
+solo por el codigo de salida. Registrar transaction_scope y la referencia al
+SQL/hash/herramienta/ensayo. DeploymentAttempt (T068) conserva automaticamente
+esos campos en `sql-attempt.json` antes de Publish y al finalizar, y el workflow
+guarda `deployment-attempt.json` mas la prueba LocalDB/TRX/SQL en el artefacto
+`staging-deployment-attempt` durante 30 dias. La referencia vincula version/hash
+del SqlPackage, fuentes, escenarios, limites y hash del plan real.
+
+Ante fallo de Publish, postdeploy_result y failure_state_verification quedan
+unknown, no rolled_back/unchanged. Incluso el exito SQL conserva
+postdeploy_result=unknown hasta inspeccion independiente. API/smoke omitidos se
+registran not_executed; si falla el smoke combinado, salud/autenticacion quedan
+unknown hasta saber que comprobaciones se ejecutaron. El SQL completo nunca se
+incluye en el resumen publico del paso, ni diagnosticos nativos o tokens.
+Si se pierde el runner o no puede subirse el artefacto, tratar la evidencia como
+no disponible; no reintentar sin inspeccionar el destino.
+
+Resolver la causa y cualquier dato invalido solo con autorizacion. Reevaluar el
+destino y exigir revision de los hashes nuevos cuando cambie el plan; no reintentar
+automaticamente. No borrar columnas ni deshabilitar constraints para forzar exito.
+El rollback del motor sobre la transaccion propia del postdeploy no es una
+restauracion ni una reversion destructiva del esquema. PITR sigue siendo manual,
+autorizado y hacia una base separada.
+
 | Etapa fallida | Accion inmediata | Condicion para continuar |
 |---|---|---|
 | Preflight o verificacion de artefactos | Detener el flujo; conservar el run ID y el error sanitizado. No solicitar credenciales SQL ni iniciar publicaciones. | Corregir la causa y volver a validar el mismo release; cualquier cambio de paquete requiere un release nuevo. |
