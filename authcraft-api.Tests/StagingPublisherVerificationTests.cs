@@ -46,6 +46,53 @@ public sealed class StagingPublisherVerificationTests
         Assert.DoesNotContain("Invoke-DatabaseDeployment", workflow, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void StagingResumeWorkflow_UsesReviewedArtifactsWithoutRebuildingTheRelease()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), ".github", "workflows", "deploy_authcraft-api-staging.yml")).ReplaceLineEndings("\n");
+
+        Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
+        Assert.Contains("release_run_id:", workflow, StringComparison.Ordinal);
+        Assert.Contains("review_issue_number:", workflow, StringComparison.Ordinal);
+        Assert.Contains("staging_baseline_sha:", workflow, StringComparison.Ordinal);
+        Assert.Contains("cancel-in-progress: false", workflow, StringComparison.Ordinal);
+        Assert.Contains("actions: read", workflow, StringComparison.Ordinal);
+        Assert.Contains("contents: read", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("contents: write", workflow, StringComparison.Ordinal);
+        Assert.Contains("id-token: write", workflow, StringComparison.Ordinal);
+        var jobsBoundary = workflow.IndexOf("\njobs:", StringComparison.Ordinal);
+        Assert.True(jobsBoundary > 0);
+        Assert.DoesNotContain("id-token: write", workflow[..jobsBoundary], StringComparison.Ordinal);
+        Assert.Contains("workflowRun.head_sha", workflow, StringComparison.Ordinal);
+        Assert.Contains("workflowRun.id", workflow, StringComparison.Ordinal);
+        Assert.Contains("staging-schema-review", workflow, StringComparison.Ordinal);
+        Assert.Contains("run-id:", workflow, StringComparison.Ordinal);
+        Assert.Contains("Test-ReleasePreflight.ps1", workflow, StringComparison.Ordinal);
+        Assert.Contains("deployment_authorized -ne $false", workflow, StringComparison.Ordinal);
+        Assert.Contains("Invoke-DatabaseDeployment.ps1", workflow, StringComparison.Ordinal);
+        Assert.Contains("-Mode Publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("az webapp deploy", workflow, StringComparison.Ordinal);
+        Assert.Contains("Test-StagingRelease.ps1", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet build", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dotnet publish", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("msbuild ", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("authcraft-api --src-path", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("production", workflow, StringComparison.OrdinalIgnoreCase);
+        var smokeCredentialsGate = workflow.IndexOf("Require synthetic Staging smoke credentials", StringComparison.Ordinal);
+        var azureLogin = workflow.IndexOf("Log in to the Staging publisher through OIDC", StringComparison.Ordinal);
+        var preflight = workflow.IndexOf("Verify release provenance and current Staging gates", StringComparison.Ordinal);
+        var databasePublish = workflow.IndexOf("Publish the reviewed Staging database plan", StringComparison.Ordinal);
+        var apiDeploy = workflow.IndexOf("Deploy the same API package to Staging", StringComparison.Ordinal);
+        var smoke = workflow.IndexOf("Verify Staging health, synthetic login, and tenant roles", StringComparison.Ordinal);
+        Assert.True(smokeCredentialsGate >= 0);
+        Assert.True(azureLogin > smokeCredentialsGate);
+        Assert.True(preflight > azureLogin);
+        Assert.True(databasePublish > preflight);
+        Assert.True(apiDeploy > databasePublish);
+        Assert.True(smoke > apiDeploy);
+    }
+
     [Theory]
     [InlineData("success", true)]
     [InlineData("wrong-ref", false)]

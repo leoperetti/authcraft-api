@@ -16,3 +16,5 @@ IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'apple')
 	INSERT INTO dbo.providers (name) VALUES ('apple');
 IF NOT EXISTS (SELECT 1 FROM dbo.providers WHERE name = 'github')
 	INSERT INTO dbo.providers (name) VALUES ('github');
+
+:r .\ValidateConstraints.sql

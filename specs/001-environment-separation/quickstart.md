@@ -197,14 +197,15 @@ Run [42386493432](https://github.com/leoperetti/authcraft-api/actions/runs/42386
 solo lectura completados con OIDC real y evidencia `staging-schema-review`.
 No se ejecuto Publish ni postdeploy.
 
-El workflow Staging reconciliado actualmente solo valida paquetes, verifica
-procedencia y metadatos, y prepara una revision. No tiene pasos Publish ni despliegue
-API. El preflight exitoso no autoriza una publicacion. Antes de implementar o ejecutar
-un flujo de publicacion, deben completarse T033/T035/T037/T038 y la autorizacion
-especifica del release. Preparar cuentas o tenants sinteticos solo despues de aplicar
-un esquema compatible, antes del smoke, con autorizacion de esa escritura y sin
-enviar notificaciones. Registrar run ID, manifiesto y hashes; comprobar destino y
-base antes de cualquier escritura.
+El workflow Staging de validacion verifica paquetes, procedencia y metadatos, y
+prepara una revision; no publica. Se preparo localmente
+`.github/workflows/deploy_authcraft-api-staging.yml` para reanudar, sin reconstruir,
+un run exitoso y revisado. Esta ruta no se ha subido ni ejecutado. Antes de
+habilitarla deben completarse T033/T035/T037/T038 y los gates concretos listados
+abajo. El preflight exitoso no autoriza por si solo una publicacion. Preparar cuentas
+o tenants sinteticos solo despues de aplicar un esquema compatible, antes del smoke,
+con autorizacion de esa escritura y sin enviar notificaciones. Registrar run ID,
+manifiesto y hashes; comprobar destino y base antes de cualquier escritura.
 
 El workflow vigente agrega `preflight-staging` despues de `validate` y
 `verify-staging-publisher`. Consulta Actions autenticado, vuelve a descargar y
@@ -225,6 +226,47 @@ verificable del workflow nuevo. El run 42637441215 produjo un preflight con base
 `unknown`, no un despliegue. Consultar el [runbook de recuperacion](../../docs/deployment-recovery.md)
 y no asumir que hay una version actual confirmada para restaurar.
 
+La inspeccion del SQL exacto de `42669270551` encontro siete
+`WAITFOR DELAY '00:00.010'`, cada uno antes de agregar una constraint con
+`WITH NOCHECK`. No aparecen en el proyecto SQL, el PostDeployment fuente ni el
+`postdeploy.sql`/`model.xml` del DACPAC. Su procedencia dentro del generador no
+esta explicada; el SQL descargado coincide con el hash publicado. No aprobar ni
+publicar este plan hasta reproducir y explicar esos `WAITFOR`. Si se regenera el
+SQL, revisar y aprobar los hashes nuevos exactos.
+
+Actualizacion: la reproduccion directa con SqlPackage 170.5.96.0 y el DACPAC
+exacto si genera los siete WAITFOR, sin wrapper ni edicion manual. No es evidencia
+de manipulacion. Sigue pendiente determinar su finalidad; el riesgo confirmado
+es que no hay validacion final, incluso con `ScriptNewConstraintValidation=True`.
+El gate inicial rechazo cualquier token `NOCHECK`. La correccion versionada ahora
+permite solo las siete constraints revisadas y exige su bloque exacto de
+`WITH CHECK CHECK CONSTRAINT`, seguido unicamente de mensajes/separadores y
+validaciones DacFx reconocidos. Constraints ajenas, deshabilitaciones, cambios al
+bloque y SQL posterior arbitrario bloquean Publish; Evaluate permanece disponible.
+No editar el SQL descargado ni omitir el gate: reevaluar y revisar hashes nuevos.
+
+`WITH NOCHECK` al agregar constraints omite la comprobacion de las filas
+existentes y deja la constraint habilitada pero no confiable. Los cambios futuros
+siguen validados salvo que se deshabilite la constraint por separado; las filas
+antiguas no quedan certificadas y el optimizador no puede usar la constraint como
+evidencia de integridad para ciertas optimizaciones. Una consulta posterior a
+Staging encontro los checks `CK_memberships_status` y `CK_tenants_status`
+habilitados y confiables (`is_disabled=0`, `is_not_trusted=0`), con definiciones
+equivalentes a las fuentes. La fuente/DACPAC expresa sus listas como `IN (...)`;
+el modelo extraido de la base las expresa como ORs equivalentes. Comparar ambos
+DACPACs con `SqlPackage /Action:DeployReport` en modo offline reprodujo los
+mismos `DROP`/`CREATE`, por lo que la normalizacion de la expresion es una causa
+probable del diff, aunque no hay diagnostico DacFx que pruebe el motivo interno.
+El script del release anterior degradaria esos checks confiables. La correccion
+local normaliza las expresiones a OR y la nueva evaluacion no recrea esos checks;
+valida explicitamente las siete constraints revisadas al cerrar el postdeploy.
+El ensayo LocalDB publico el DACPAC, rechazo datos invalidos al validar y comprobo
+confianza final. La evaluacion remota fue solo DeployReport/Script y el SQL paso
+el gate local; no es una aprobacion de publicacion.
+El nuevo script no contiene WAITFOR. Los hashes estan en el
+[registro de ambientes](../../docs/environments.md#correccion-versionada-y-ensayo-local-verificado).
+Crear un nuevo release con estos cambios: `42669270551` no contiene la correccion.
+
 La revision SQL debe estar en una issue abierta de `leoperetti/authcraft-api`,
 como comentario de `leoperetti`, con exactamente una linea por campo del
 [contrato de revision](contracts/environment-deployment.md#evidencia-de-revisión-de-compatibilidad).
@@ -237,6 +279,44 @@ Rechazo, campos repetidos, cambio de hashes, error de API o revocacion bloquean.
 Conservar report/script originales y los archivos `staging-recheck-*` con acceso
 restringido. Las pruebas locales sustituyen GitHub y SqlPackage; no demuestran
 que el publicador tenga permisos SQL en Azure.
+
+La ruta de reanudacion descarga API, DACPAC, manifiesto y evidencia del run original,
+revalida procedencia y estado actual, exige el comentario de revision exacto y solo
+entonces intenta SQL Publish; despues despliega el ZIP de ese mismo run y ejecuta el
+smoke. No reconstruye, no concede permisos automaticamente y no hace rollback
+destructivo. Antes de poder ejecutarla:
+
+- deben subirse los cambios y generarse un nuevo release; debe existir en la issue
+  #11 una revision autenticada que identifique ese nuevo run, commit, destino,
+  baseline verificado o `unknown` inicial, opciones y sus cuatro hashes exactos,
+  con aceptaciones explicitas de compatibilidad API, impacto de datos y recuperacion.
+  No reutilizar la revision ni el DACPAC de `42669270551`;
+- deben existir como GitHub Actions secrets los cuatro datos de una cuenta
+  sintetica exclusiva de Staging (los nombres ya estan configurados):
+  `AUTHCRAFT_STAGING_SMOKE_IDENTIFIER`,
+  `AUTHCRAFT_STAGING_SMOKE_PASSWORD`, `AUTHCRAFT_STAGING_SMOKE_CLIENT_ID` y
+  `AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID`. No enviar estos valores por chat;
+- debe verificarse que el principal SQL tenga permisos DacFx de publicacion y un
+  procedimiento comprobable para retirarlos inmediatamente. Hoy el principal solo
+  tiene permisos de lectura/revision; la autorizacion previa para un `db_owner`
+  temporal no significa que se haya concedido.
+
+Con los gates anteriores completados y despues de subir/revisar el workflow, la
+reanudacion usa estos campos, sin reconstruir el candidato:
+
+```powershell
+gh workflow run deploy_authcraft-api-staging.yml --ref main `
+  --field release_run_id=$reviewedReleaseRunId `
+  --field review_issue_number=11 `
+  --field staging_baseline_sha=unknown `
+  --field allow_initial_staging_bootstrap=true
+```
+
+No ejecutar el comando mientras falte cualquiera de los gates. El workflow falla
+antes de Azure si faltan secretos de smoke; sin permiso SQL la evaluacion/publicacion
+DacFx tambien falla sin intentar rutas alternativas. Cualquier fallo despues de
+SQL Publish exige inspeccion manual: el esquema puede estar aplicado aunque API o
+smoke no hayan terminado.
 
 Obtener hostname desde ARM; no construir `<app>.azurewebsites.net` por suposición.
 Tras implementación/autorización:

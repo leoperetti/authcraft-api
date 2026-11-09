@@ -7,6 +7,34 @@ namespace authcraft_api.Tests;
 public sealed class DatabaseDeploymentReviewTests
 {
     [Fact]
+    public void Evaluate_PreservesUnvalidatedPlanForDiagnosticsWithoutPublishing()
+    {
+        using var sandbox = new ReviewSandbox();
+
+        var result = sandbox.Run("evaluate-unvalidated-check");
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        using var evaluated = JsonDocument.Parse(result.Output);
+        Assert.Equal("evaluated", evaluated.RootElement.GetProperty("state").GetString());
+        var scriptPath = evaluated.RootElement.GetProperty("deploy_script_path").GetString()!;
+        Assert.Contains("WITH NOCHECK", File.ReadAllText(scriptPath), StringComparison.Ordinal);
+        Assert.Equal(["/Action:DeployReport", "/Action:Script"], sandbox.Actions);
+    }
+
+    [Theory]
+    [InlineData("validated-deferred-check")]
+    [InlineData("validated-dacfx-tail")]
+    public void Publish_AllowsDeferredValidationOnlyWithTheTrustedFinalValidationBlock(string scenario)
+    {
+        using var sandbox = new ReviewSandbox();
+
+        var result = sandbox.Run(scenario);
+
+        Assert.True(result.ExitCode == 0, result.Error);
+        Assert.Contains("/Action:Publish", sandbox.Actions);
+    }
+
+    [Fact]
     public void Publish_RevalidatesExactAuthenticatedReviewAndPlanBeforePublishing()
     {
         using var sandbox = new ReviewSandbox();
@@ -52,6 +80,13 @@ public sealed class DatabaseDeploymentReviewTests
     [InlineData("dacpac-changed")]
     [InlineData("dacpac-changed-on-recheck")]
     [InlineData("destructive-plan")]
+    [InlineData("unvalidated-check")]
+    [InlineData("unvalidated-foreign-key")]
+    [InlineData("disabled-constraint")]
+    [InlineData("validation-not-final")]
+    [InlineData("validation-followed-by-write")]
+    [InlineData("validation-modified")]
+    [InlineData("uncovered-constraint")]
     [InlineData("reviewer-override")]
     [InlineData("wrong-options")]
     [InlineData("missing-options")]
@@ -68,6 +103,12 @@ public sealed class DatabaseDeploymentReviewTests
         Assert.NotEqual(0, result.ExitCode);
         Assert.DoesNotContain("/Action:Publish", sandbox.Actions);
         Assert.DoesNotContain(sandbox.SyntheticToken, result.Output + result.Error, StringComparison.Ordinal);
+        if (scenario is "unvalidated-check" or "unvalidated-foreign-key" or "disabled-constraint"
+            or "validation-not-final" or "validation-followed-by-write" or "validation-modified" or "uncovered-constraint")
+        {
+            Assert.Contains("NOCHECK", result.Error, StringComparison.Ordinal);
+            Assert.Equal(2, sandbox.Actions.Length);
+        }
         if (scenario == "plan-drift")
         {
             Assert.Contains("changed after review", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -129,6 +170,8 @@ public sealed class DatabaseDeploymentReviewTests
             var dacpacPath = Path.Combine(_directory, "database.dacpac");
             var manifestPath = Path.Combine(_directory, "manifest.json");
             var sqlPackagePath = Path.Combine(_directory, "sqlpackage.ps1");
+            var validationSqlPath = Path.Combine(
+                FindRepositoryRoot(), "authcraft-db", "postdeploys", "ValidateConstraints.sql");
             File.WriteAllBytes(dacpacPath, [1, 2, 3]);
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
             {
@@ -161,6 +204,36 @@ public sealed class DatabaseDeploymentReviewTests
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recheck-output' -and $path -like '*recheck-*-script.sql') { exit 0 }
                     $sql = 'CREATE TABLE dbo.synthetic_test (id INT);'
                     if ($env:REVIEW_TEST_SCENARIO -eq 'destructive-plan') { $sql = 'DROP TABLE dbo.existing_data;' }
+                    if ($env:REVIEW_TEST_SCENARIO -in @('unvalidated-check', 'evaluate-unvalidated-check')) {
+                        $sql = 'ALTER TABLE [dbo].[synthetic_test] WITH NOCHECK ADD CONSTRAINT [CK_test] CHECK (id > 0);'
+                    }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'unvalidated-foreign-key') {
+                        $sql = 'ALTER TABLE [dbo].[synthetic_test] WITH NOCHECK ADD CONSTRAINT [FK_test] FOREIGN KEY (id) REFERENCES dbo.parent(id);'
+                    }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'disabled-constraint') {
+                        $sql = 'ALTER TABLE [dbo].[synthetic_test] NOCHECK CONSTRAINT [CK_test];'
+                    }
+                    if ($env:REVIEW_TEST_SCENARIO -in @('validated-deferred-check', 'validated-dacfx-tail', 'validation-not-final', 'validation-followed-by-write', 'validation-modified', 'uncovered-constraint')) {
+                        $sql = "ALTER TABLE [dbo].[invitations] WITH NOCHECK ADD CONSTRAINT [CK_invitations_purpose] CHECK (purpose IS NULL);`nGO`n"
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'uncovered-constraint') {
+                            $sql = $sql -replace 'CK_invitations_purpose', 'CK_uncovered'
+                        }
+                        $validation = Get-Content -LiteralPath $env:REVIEW_TEST_VALIDATION_SQL -Raw
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'validation-modified') {
+                            $validation = $validation -replace 'WITH CHECK CHECK', 'WITH NOCHECK CHECK'
+                        }
+                        $sql += $validation + "`nGO`n"
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'validated-dacfx-tail') {
+                            $sql += "PRINT N'Checking existing data';`nGO`nUSE [`$(DatabaseName)];`nGO`n"
+                            $sql += "ALTER TABLE [dbo].[invitations] WITH CHECK CHECK CONSTRAINT [CK_invitations_purpose];`nGO`nPRINT N'Complete';`nGO`n"
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'validation-not-final') {
+                            $sql += 'ALTER TABLE dbo.invitations NOCHECK CONSTRAINT CK_test;'
+                        }
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'validation-followed-by-write') {
+                            $sql += "INSERT INTO dbo.providers (name) VALUES ('unexpected');"
+                        }
+                    }
                     if (Test-Path -LiteralPath $env:REVIEW_TEST_DRIFT_PATH) { $sql += ' ALTER TABLE dbo.synthetic_test ADD other_id INT;' }
                     [IO.File]::WriteAllText($path, $sql)
                 }
@@ -172,6 +245,7 @@ public sealed class DatabaseDeploymentReviewTests
                 exit 0
                 """);
             var publisherPath = Path.Combine(FindRepositoryRoot(), "scripts", "Invoke-DatabaseDeployment.ps1");
+            ValidationSqlPath = validationSqlPath;
             File.WriteAllText(_harnessPath, $$"""
                 $ErrorActionPreference = 'Stop'
                 $script:commentsRead = 0
@@ -263,6 +337,7 @@ public sealed class DatabaseDeploymentReviewTests
                     ReviewIssueNumber = '10'
                     StagingBaselineSha = 'unknown'
                 }
+                if ($env:REVIEW_TEST_SCENARIO -eq 'evaluate-unvalidated-check') { $parameters.Mode = 'Evaluate' }
                 if ($env:REVIEW_TEST_SCENARIO -eq 'reviewer-override') { $parameters.AllowedReviewer = 'other-user' }
                 & '{{publisherPath}}' @parameters
                 """);
@@ -273,6 +348,7 @@ public sealed class DatabaseDeploymentReviewTests
         public string SchemaStatePath { get; }
         public string ReviewedReportPath { get; }
         public string ReviewedScriptPath { get; }
+        private string ValidationSqlPath { get; }
 
         public string[] SnapshotProtectedFiles()
         {
@@ -300,6 +376,7 @@ public sealed class DatabaseDeploymentReviewTests
             processInfo.Environment["REVIEW_TEST_ACTION_LOG"] = _actionLog;
             processInfo.Environment["REVIEW_TEST_SCHEMA_STATE_PATH"] = SchemaStatePath;
             processInfo.Environment["REVIEW_TEST_DRIFT_PATH"] = Path.Combine(_directory, "drift");
+            processInfo.Environment["REVIEW_TEST_VALIDATION_SQL"] = ValidationSqlPath;
             using var process = Process.Start(processInfo)!;
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();

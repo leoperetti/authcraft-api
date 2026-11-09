@@ -1,10 +1,11 @@
 <!--
 Sync Impact Report
-Version change: 2.0.0 -> 2.1.0
+Version change: 2.1.0 -> 2.2.0
 Modified principles: None
-Added sections: VIII. Keep Production Releases Protected
+Added sections: IX. Review Database Deployment Evidence and Integrity
 Removed sections: None
-Follow-up TODOs: Create the deferred Production release checklist in docs/.
+Follow-up TODOs: Investigate generated WAITFOR statements and fix/re-evaluate the
+Staging deployment plan before approval; verify post-deployment provider uniqueness.
 -->
 
 # AuthCraft API Constitution
@@ -67,6 +68,22 @@ recovery plan for the exact immutable release. Documentation describes these
 checks but MUST NOT enable or authorize publication. This prevents a review aid
 or technical capability from being mistaken for approval to change Production.
 
+### IX. Review Database Deployment Evidence and Integrity
+Before any database publication, reviewers MUST inspect the DeployReport and
+generated SQL for the exact immutable release and destination, verify their
+hashes, and re-evaluate the plan against the live target in read-only Script or
+DeployReport mode. Every generated statement MUST be attributable to the
+versioned database project or an identified, versioned deployment tool behavior;
+unexplained statements such as `WAITFOR` block approval. New foreign-key and
+check constraints MUST validate existing rows and remain trusted unless an
+explicitly reviewed exception documents why that is safe. Semantically
+equivalent existing constraints MUST NOT be dropped and recreated without a
+demonstrated reason and review of the resulting trust state. Post-deployment
+inserts that rely on natural keys MUST have a verified uniqueness constraint
+for those keys in the target schema. This prevents opaque generated behavior,
+silent loss of constraint trust, and duplicate seed data from passing release
+review.
+
 ## Technical Constraints
 
 - The API targets .NET 10 and uses the Application, Domain, Infrastructure, and
@@ -75,6 +92,9 @@ or technical capability from being mistaken for approval to change Production.
 - The deployment workflow builds the API and database project before
   deployment; changes MUST NOT assume application code alone is the full
   deployment.
+- SQL column names MUST use lowercase `snake_case`.
+- Database release gates MUST be read-only until exact release evidence,
+  permissions, and required approvals are verified.
 
 ## Development Workflow
 
@@ -101,4 +121,4 @@ change conflicts with a principle, its proposal MUST describe the impact and
 include a compatibility, security, or deployment plan; amend the principle
 when the project decision changes.
 
-**Version**: 2.1.0 | **Ratified**: 2026-11-02 | **Last Amended**: 2026-11-07
+**Version**: 2.2.0 | **Ratified**: 2026-11-02 | **Last Amended**: 2026-11-09

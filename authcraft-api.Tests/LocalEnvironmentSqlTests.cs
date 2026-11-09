@@ -48,7 +48,7 @@ public sealed class LocalEnvironmentSqlTests
                 "-TargetDatabaseName", targetDatabaseName,
                 "-SqlPackagePath", sqlPackagePath,
                 "-EvidenceDirectory", evidenceDirectory);
-            Assert.Equal(0, report.ExitCode);
+            Assert.True(report.ExitCode == 0, report.Output + report.Error);
 
             var reportPath = Path.Combine(evidenceDirectory, "local-deploy-report.xml");
             var scriptPath = Path.Combine(evidenceDirectory, "local-deploy.sql");
@@ -76,7 +76,7 @@ public sealed class LocalEnvironmentSqlTests
                 "-ReviewedReportSha256", reportHash,
                 "-ReviewedScriptSha256", scriptHash,
                 "-ConfirmedTargetDatabase", targetDatabaseName);
-            Assert.Equal(0, publish.ExitCode);
+            Assert.True(publish.ExitCode == 0, publish.Output + publish.Error);
 
             var options = new DbContextOptionsBuilder<AppDbContext>()
                 .UseSqlServer(targetConnectionString)
@@ -90,6 +90,7 @@ public sealed class LocalEnvironmentSqlTests
                 .SingleAsync();
             Assert.Equal(13, tableCount);
 
+            await VerifyConstraintValidationAsync(targetConnectionString, repositoryRoot);
             await VerifySchemaReviewPermissionsAsync(targetConnectionString);
         }
         finally
@@ -101,6 +102,39 @@ public sealed class LocalEnvironmentSqlTests
 
             Directory.Delete(evidenceDirectory, recursive: true);
         }
+    }
+
+    private static async Task VerifyConstraintValidationAsync(string connectionString, string repositoryRoot)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = 30;
+        const string untrustedConstraintCount = """
+            SELECT (SELECT COUNT(*) FROM sys.check_constraints WHERE is_disabled = 1 OR is_not_trusted = 1)
+                 + (SELECT COUNT(*) FROM sys.foreign_keys WHERE is_disabled = 1 OR is_not_trusted = 1);
+            """;
+        command.CommandText = untrustedConstraintCount;
+        Assert.Equal(0, Convert.ToInt32(await command.ExecuteScalarAsync()));
+
+        command.CommandText = """
+            ALTER TABLE dbo.tenants NOCHECK CONSTRAINT CK_tenants_status;
+            INSERT INTO dbo.tenants (client_id, slug, name, status)
+            VALUES ('constraint-validation-test', 'constraint-validation-test', 'Constraint validation test', 'invalid');
+            """;
+        await command.ExecuteNonQueryAsync();
+        var validationSql = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "authcraft-db", "postdeploys", "ValidateConstraints.sql"));
+        command.CommandText = validationSql;
+        var exception = await Assert.ThrowsAsync<SqlException>(() => command.ExecuteNonQueryAsync());
+        Assert.Equal(547, exception.Number);
+
+        command.CommandText = "DELETE FROM dbo.tenants WHERE client_id = 'constraint-validation-test';";
+        await command.ExecuteNonQueryAsync();
+        command.CommandText = validationSql;
+        await command.ExecuteNonQueryAsync();
+        command.CommandText = untrustedConstraintCount;
+        Assert.Equal(0, Convert.ToInt32(await command.ExecuteScalarAsync()));
     }
 
     private static async Task VerifySchemaReviewPermissionsAsync(string connectionString)

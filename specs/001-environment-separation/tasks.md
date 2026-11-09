@@ -226,6 +226,60 @@ No agregar tablas para el modelo operativo de publicaciones.
   ready_for_review con deployment_authorized=false y baseline unknown. No existe
   comentario autenticado del issue #11 para este run ni incluye
   `script_database_options=false`; Publish sigue bloqueado.
+
+  Reevaluacion autorizada 2026-11-09: run 42669270551, commit
+  63ed699446bd3b8d8b1da934055208ecbaf3eb90, completo validate, OIDC/permisos de
+  lectura-revision y preflight review-only; baseline unknown y
+  deployment_authorized=false. Los hashes exactos estan en
+  `docs\environments.md`. No hay revision autenticada del issue #11 para este run;
+  no se verificaron permisos DacFx de Publish ni se publico.
+
+  Hallazgo de revision local 2026-11-09: el SQL exacto de
+  `staging-schema-review` contiene siete `WAITFOR DELAY '00:00.010'` antes de
+  agregar constraints `WITH NOCHECK`. El hash descargado coincide con la evidencia;
+  no se encontraron esas instrucciones en el proyecto SQL, PostDeployment fuente
+  ni en el contenido `postdeploy.sql`/`model.xml` del DACPAC. El paquete identifica
+  DacFx ProductVersion 170.4.53.0, pero el log no registra la version de SqlPackage
+  que genero el plan. Origen aun no explicado: no aprobar ni publicar hasta
+  reproducirlo y determinar su procedencia; regenerar implica nueva revision de
+  hashes exactos.
+  Evaluacion adicional: los siete `WITH NOCHECK` omiten validacion/trust de datos
+  existentes, pero por si solos no deshabilitan constraints para DML futuro. Los
+  checks de status `CK_memberships_status` y `CK_tenants_status` fueron consultados
+  en Staging y resultaron habilitados/confiables y semantica equivalente a fuente.
+  La extraccion de solo esquema mas comparacion DacFx offline (SqlPackage 170.5.96)
+  reprodujo el mismo DROP/CREATE; el modelo fuente guarda `IN (...)`, el extraido
+  una expresion OR equivalente. Es una explicacion probable, no diagnostico interno
+  confirmado. El plan aun los degradaria a no confiables: corregir generacion para
+  conservar constraints equivalentes y usar validacion para las nuevas. El
+  optimizador no queda globalmente roto, pero no puede usar constraints no
+  confiables para ciertas optimizaciones.
+
+  Reproduccion posterior: SqlPackage local 170.5.96.0 y el DACPAC exacto,
+  verificado por hash, generaron directamente los siete WAITFOR y NOCHECK contra
+  Staging en modo Script. No son evidencia de edicion manual. La opcion explicita
+  ScriptNewConstraintValidation=True tampoco genero validacion final. Se agrego
+  bloqueo conservador por token NOCHECK solo a Publish; Evaluate conserva
+  diagnosticos. Tres tests negativos fallaron antes y 51 pruebas focalizadas
+  pasaron despues, incluida preservacion de Evaluate. El bloqueo no corrige aun
+  la generacion ni completa T033. `providers.name` tiene clave unica habilitada,
+  sin filtro y de una columna en Staging, verificada por consulta de catalogo.
+
+  Correccion posterior autorizada: normalizacion OR de los dos checks de status
+  y siete validaciones explicitas en postdeploy con guard acotado al conjunto
+  revisado. El gate acepta solo creaciones NOCHECK de ese conjunto, el bloque
+  versionado exacto y el cierre DacFx reconocido; bloquea SQL posterior arbitrario.
+  Build SQL correcto y Publish real en LocalDB descartable verificado: confianza
+  final global, rechazo SQL 547 de datos invalidos y recuperacion tras limpiar el
+  fixture. DeployReport/Script contra Staging ya no recrea checks equivalentes y
+  el SQL real pasa el gate sin Publish. Hashes en docs/environments.md.
+  Falta crear/revisar un nuevo release de Actions: el run 42669270551 no contiene
+  esta correccion. No se completa T033 ni se habilita publicacion remota.
+
+  Continuacion autorizada: commit/push a main y dispatch de generacion/evaluacion
+  sin Publish, sin permisos nuevos y sin despliegue API. Antes del commit pasaron
+  las 147 pruebas seleccionadas por el workflow, con LocalDB habilitado y sin
+  omisiones. La revision autenticada del nuevo release sigue pendiente.
 - [X] T034 [US3] Implementar `scripts\Test-StagingRelease.ps1` para host resuelto desde ARM, HTTPS, status/version exactos en salud, login/roles de tenant sintético, timeout finito/reintentos acotados y resultado fallido explícito; credenciales/token en memoria protegida, sin signup/invitaciones/reset ni notificaciones reales.
 - [ ] T035 [US3] Completar el workflow activo de Staging en `.github\workflows\main_authcraft-api-staging.yml`: PR solo build/pruebas sin Azure; workflow_dispatch en main construye API y SQL una vez, ejecuta las pruebas focalizadas, publica manifiesto/paquetes con retención acordada, evalúa esquema, verifica procedencia/baseline/metadatos live y exige revisión autenticada antes de cualquier Publish/API/smoke. Mantener el workflow Production separado y `disabled_manually`, sin publicador efectivo; limitar id-token:write a jobs Azure, serializar publicación completa con cancel-in-progress:false y permitir reanudar el mismo release tras revisión sin reconstrucción. La revisión SQL Staging no sustituye aprobación protegida Production. El job local `preflight-staging` solo prepara revisión y nunca despliega.
 
@@ -234,6 +288,22 @@ No agregar tablas para el modelo operativo de publicaciones.
   unicos tras corregir el path del upload. El workflow sigue sin jobs de Publish,
   despliegue API o smoke; T035 permanece pendiente hasta implementar y probar el
   flujo gated de reanudacion del mismo release.
+
+  Reevaluacion 2026-11-09: run 42669270551 completo build, pruebas, evaluacion y
+  preflight para el HEAD 63ed699; no ejecuto Publish, despliegue API ni smoke.
+  El workflow sigue sin jobs de publicacion; T035 permanece pendiente.
+
+  Implementacion local 2026-11-09: se agrego
+  `.github\workflows\deploy_authcraft-api-staging.yml` como reanudacion manual del
+  run original, sin reconstruccion. Verifica run/jobs/artefactos retenidos, vuelve
+  a comprobar preflight, exige revision autenticada exacta mediante el publicador
+  existente, bloquea antes de Azure si faltan secretos de smoke y solo secuencia
+  SQL Publish -> deploy del ZIP original -> smoke. Pruebas focalizadas
+  `StagingPublisherVerificationTests` pasan; no se subio ni ejecuto el workflow.
+  Los cuatro nombres de secretos smoke ya constan en GitHub Actions, sin consultar
+  sus valores. T035 queda pendiente de revision exacta del run 42669270551,
+  permisos DacFx/revocacion verificables y validacion integral en GitHub. No se
+  concedieron permisos ni se modifico Azure.
 - [X] T036 [US3] Con autorización explícita, configurar ASPNETCORE_ENVIRONMENT=Staging, vault esperado y secretos exclusivos requeridos en `authcraft-api-staging`/`authcraft-vault-staging`; revisar configuración pública production sin publicarla ni activar transición JWT/alterar bootstrap. Documentar claves/capacidades opcionales y fuentes en `docs\environments.md`, sin copiar secretos production.
 - [ ] T037 [US3] Con autorización explícita, establecer/vincular `authcraft-api-st-id-97cc` como publicador OIDC main limitado a staging, verificar issuer/audiencia/prefijo inmutable y usuario SQL contenido con permisos DacFx mínimos probados en su propia base; no conceder permisos production ni exigir environments privados no disponibles. Registrar verificación de token/scope sin JWT completo en `docs\environments.md`.
 
@@ -312,6 +382,10 @@ No agregar tablas para el modelo operativo de publicaciones.
   con exito. Esto no acredita permisos DacFx para Publish ni autoriza el permiso
   SQL temporal; T037 sigue pendiente.
 
+  Reevaluacion 2026-11-09: run 42669270551 volvio a confirmar login OIDC y
+  permisos de lectura/revision para el commit 63ed699. No se concedieron ni
+  probaron grants DacFx de publicacion; T037 sigue pendiente.
+
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api-staging.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 
   Avance 2026-11-09: 130 pruebas focalizadas pasaron y una prueba SQL local se
@@ -326,6 +400,11 @@ No agregar tablas para el modelo operativo de publicaciones.
   siendo de validacion. El run 42637441215 validó también el job de preflight
   review-only con OIDC real. T038 permanece pendiente hasta completar T035 y
   verificar el workflow reconciliado y todos los casos T026/T027 en el runner previsto.
+
+  Validacion local 2026-11-09: 20 pruebas de `StagingPublisherVerificationTests`
+  pasan incluyendo los contratos estaticos del workflow de reanudacion. Aun falta
+  ejecutar la ruta en GitHub con gates disponibles y verificar los casos de
+  autorizacion/permiso reales; T038 permanece pendiente.
 - [ ] T039 [US3] Implementar registro en el resumen/artefacto protegido de `.github\workflows\main_authcraft-api-staging.yml` de DeploymentAttempt con "`result`: pending | blocked | failed | succeeded.", timestamps, versión/destino y resultados preflight/esquema/API/salud/autenticación; CandidateRelease con "`state`: built | staging_failed | staging_validated | awaiting_approval | production_blocked | approved | production_failed | published.", marcando production_blocked tras staging sin aprobación disponible y sin sugerir que production fue publicado; verificar estados con ejecuciones simuladas antes de activar el workflow.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.

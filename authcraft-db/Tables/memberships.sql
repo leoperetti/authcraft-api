@@ -17,5 +17,5 @@
     CONSTRAINT [FK_memberships_invited_by] FOREIGN KEY ([invited_by])
         REFERENCES [dbo].[identities]([id]) ON DELETE NO ACTION,
     CONSTRAINT [CK_memberships_status]
-        CHECK ([status] IN ('invited','active','suspended','removed'))
+        CHECK ([status] = 'removed' OR [status] = 'suspended' OR [status] = 'active' OR [status] = 'invited')
 );

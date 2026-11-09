@@ -8,14 +8,19 @@ pruebas. No pertenecen a esta feature y no se revierten. La solucion ya incluye
 
 El workflow Production remoto (ID `374894897`) esta `disabled_manually`; el de
 Staging (ID `407226559`) permanece `active`. En la revalidacion de solo lectura
-del 2026-11-09, `main` remoto y local coinciden en
-`6a2a123149073b84bd61b0fc76a781294fdc7ffa`; no habia ejecuciones Production
-encoladas ni en curso entre las 15 consultadas. No se modifico el servicio
-Production.
+del 2026-11-09, el HEAD de `main` remoto y local coincide en
+`63ed699446bd3b8d8b1da934055208ecbaf3eb90`. La documentacion de esta evaluacion
+queda local, sin commit, para no avanzar el SHA del release. No habia ejecuciones
+Production encoladas ni en curso entre las 15 consultadas. No se modifico el
+servicio Production.
 
 El workflow Staging valida paquetes y, cuando se solicita, ejecuta el preflight
 de procedencia, baseline y metadatos ARM. El preflight solo deja el release
 `ready_for_review` con `deployment_authorized=false`: no publica SQL ni API.
+El workflow `deploy_authcraft-api-staging.yml` se preparo localmente para reanudar
+el run exacto sin reconstruir paquetes; aun no se subio ni se ejecuto. Exige
+revision SQL autenticada, preflight nuevo, credenciales smoke sinteticas y permisos
+SQL efectivos antes de intentar cambios.
 El run [42664956766](https://github.com/leoperetti/authcraft-api/actions/runs/42664956766)
 del commit `6a2a123149073b84bd61b0fc76a781294fdc7ffa` paso `validate`,
 `verify-staging-publisher` y `preflight-staging`; DeployReport/Script se
@@ -497,7 +502,8 @@ La preparacion fue manual y autorizada, no una ejecucion del workflow actual.
 Los bloqueos de build, reconciliacion y credenciales descritos en el registro
 original corresponden al estado observado entonces; posteriormente se reconcilio
 el workflow de Staging y se completaron los gates de T028/T029/T032. El workflow
-Staging actual solo valida y prepara una revision: aun no tiene ruta de publicacion.
+El workflow remoto Staging solo valida y prepara una revision; aun no incluye la
+ruta local de reanudacion ni una publicacion ejecutada.
 Production sigue `disabled_manually`.
 No se modificaron configuracion, secretos, esquema ni publicacion production.
 La comprobacion de conexion autorizada pudo reactivar su base pausada.
@@ -911,6 +917,211 @@ explicitas requeridas antes de que T033 pueda avanzar. La comprobacion OIDC de
 `verify-staging-publisher` confirma solo permisos de lectura/revision; no verifica
 ni concede privilegios DacFx de Publish. No se obtuvo `db_owner` ni se intento
 Publish. Por tanto T033, T035, T037 y la publicacion Staging siguen pendientes.
+
+### Evaluacion actual de Staging: run 42669270551
+
+Con autorizacion para evaluacion de solo lectura, el commit
+`63ed699446bd3b8d8b1da934055208ecbaf3eb90` completo `validate`,
+`verify-staging-publisher` y `preflight-staging`. La verificacion de publicador
+confirmo OIDC y permisos de lectura/revision; no acredita permisos DacFx para
+Publish. El preflight valido el estado `ready_for_review`, destino `staging`,
+`deployment_authorized=false` y baseline inicial `unknown`. No ejecuto Publish,
+postdeploy, despliegue API ni smoke. Los artefactos se retienen por 30 dias.
+
+Hashes SHA-256 del release y plan:
+
+- DACPAC: `69761df641a90d61858579059417a6d63006fa14c5672d3d92e7b17b434bc1aa`
+- API ZIP: `a73ae929eaf72a940ab1477eb1703a2e4d243cd08f011d9beef320ca3eba498a`
+- DeployReport: `e06fff4b57ff74c22cce5d7241a30a031378f7d2ba084e74929ca5d4bbd8c466`
+- SQL: `3dfab7b37839bbc09b4c00e7d1768df6cd27f569a34c7cd7fe131fb9631c9947`
+
+Los hashes DeployReport/SQL coinciden con la evaluacion anterior; los hashes
+API/DACPAC corresponden a este commit y run, y deben citarse en cualquier revision.
+
+**Bloqueo de revision adicional:** al inspeccionar directamente el artefacto
+`staging-schema-review` de este run se confirmaron siete instrucciones
+`WAITFOR DELAY '00:00.010'`, cada una inmediatamente antes de un
+`ALTER TABLE ... WITH NOCHECK ADD CONSTRAINT` (lineas 81, 92, 103, 114, 125,
+136 y 147 del SQL). El SHA-256 del archivo descargado coincide con el manifiesto:
+`3dfab7b37839bbc09b4c00e7d1768df6cd27f569a34c7cd7fe131fb9631c9947`.
+No se encontro `WAITFOR` en el codigo versionado, el post-deploy fuente ni el
+`postdeploy.sql` interno del DACPAC; tampoco en `model.xml`. El DACPAC exacto
+contiene `ProductVersion 170.4.53.0`, pero el log del job no registra la version
+del ejecutable SqlPackage usado para generar el script. El workflow invoca
+`Invoke-DatabaseDeployment.ps1` en modo de evaluacion, que ejecuta
+`SqlPackage /Action:Script`; aun no se ha establecido si SqlPackage/DacFx lo
+emitio o si intervino otra parte del runner/generacion. No se debe aceptar ni
+publicar este plan hasta reproducir y explicar esas siete instrucciones; si el
+SQL se vuelve a generar, hay que reevaluar y aprobar los hashes nuevos exactos.
+
+La comparacion especifica de los dos checks de status encontro una explicacion
+probable para el `DROP`/`CREATE`, no una deriva funcional: las fuentes y el modelo
+del DACPAC usan expresiones `IN (...)`; el modelo extraido de la base Staging las
+expresa como disyunciones equivalentes (`[status]='...' OR ...`). Se extrajo el
+esquema de Staging con SqlPackage 170.5.96.0 en modo `ExtractAllTableData=False`;
+la operacion fue de solo lectura y no incluyo datos. Una comparacion offline
+`SqlPackage /Action:DeployReport` entre ese DACPAC de destino y el DACPAC exacto
+del release reprodujo los mismos dos `Drop` y dos `Create` para
+`CK_memberships_status` y `CK_tenants_status`. Esto confirma que DacFx detecta una
+diferencia entre los modelos serializados, aunque las expresiones son
+semanticamente equivalentes; no prueba si la causa interna es exactamente el
+normalizador de SQL Server o la comparacion de DacFx. El DeployReport/XML tampoco
+presenta una explicacion por operacion. No se hallaron `IgnoreWhitespace` ni
+`IgnoreKeywordCasing` en el proyecto/opciones.
+
+Consulta SQL de solo lectura a `sys.check_constraints` en Staging, al 2026-11-09:
+ambos checks existen sobre sus tablas esperadas, con definiciones equivalentes a
+la fuente, `is_disabled=0`, `is_not_trusted=0`,
+`is_not_for_replication=0` e `is_system_named=0`. Por ello, las filas actuales
+estan cubiertas por constraints habilitadas y confiables; no hay evidencia de
+deriva en estos dos checks. Sin embargo, el plan candidato los quita y los vuelve
+a agregar con `WITH NOCHECK`, lo cual si perderia la confianza sin necesidad
+funcional aparente. En `ADD CONSTRAINT`, `WITH NOCHECK` no valida filas existentes
+y deja la constraint habilitada pero no confiable; nuevas escrituras siguen
+validadas salvo que se deshabilite por separado. El optimizador no esta "roto"
+globalmente, pero no puede usar una constraint no confiable para ciertas
+simplificaciones o mejoras de planes.
+
+Del total de siete, la FK y cuatro checks de `dbo.invitations` dependen de columnas
+que el mismo plan agrega como nullable sin default (`accepted_identity_id`,
+`purpose`, `dni`, `registered_dni`, y las columnas usadas por `student_profile`).
+En el delta previsto, las filas existentes obtendrian NULL en esas columnas, lo
+cual satisface sus condiciones actuales; aun asi, el script no valida/trustea
+formalmente esas filas. Los dos checks de status actualmente estan confiables,
+pero la recreacion planeada con `NOCHECK` los degradaria. Antes de reconsiderar
+el plan, corregir/revisar la generacion para que no reemplace innecesariamente
+checks equivalentes y para que las constraints nuevas se validen (`WITH CHECK
+ADD`); investigar por separado la procedencia de los `WAITFOR`. Cualquier nuevo
+script exige revisar sus hashes exactos. No aprobar ni publicar el plan actual.
+
+Verificacion adicional 2026-11-09: `dbo.providers.name` tiene en el proyecto la
+constraint `UQ_providers_name UNIQUE`. Una consulta de solo lectura al catalogo
+de Staging confirmo el indice `UQ_providers_name`, unico, habilitado, sin filtro
+y con `name` como unica columna clave. No se necesitan cambios para agregar
+unicidad a este destino; esto no hace atomico por si solo un `IF NOT EXISTS`
+seguido de `INSERT` bajo concurrencia.
+
+La ayuda de SqlPackage local 170.5.96.0 indica
+`ScriptNewConstraintValidation=True` por defecto: puede crear constraints con
+`NOCHECK` y validarlas al final. Por tanto, la revision debe comprobar el script
+completo y el estado final, no sustituir texto `WITH NOCHECK` a ciegas. El script
+historico inspeccionado no contenia esa validacion final. La reproduccion contra
+Staging con el DACPAC exacto sigue pendiente: la descarga de GitHub fallo con
+HTTP 503 `Egress is over the account limit`. El DACPAC de cache local tiene otro
+SHA-256 y no se uso como sustituto. No se ejecuto Script contra Staging en este
+intento ni se intento Publish. Sigue pendiente explicar los `WAITFOR` con una
+reproduccion de la herramienta y registrar su version y opciones.
+
+#### Reproduccion completada y bloqueo automatico
+
+Se recupero despues el DACPAC exacto del run `42669270551`, verificando SHA-256
+`69761df641a90d61858579059417a6d63006fa14c5672d3d92e7b17b434bc1aa`.
+SqlPackage local 170.5.96.0, invocado directamente con `/Action:Script` contra
+Staging y las tres opciones del publicador, reprodujo los siete
+`WAITFOR DELAY '00:00.010'` y los siete `WITH NOCHECK`. Por tanto, se corrige la
+sospecha anterior: los WAITFOR si son reproducibles en la salida de Microsoft
+SqlPackage/DacFx, sin edicion manual ni wrapper del pipeline. No se ha demostrado
+su finalidad interna; no se deben presentar como prueba de manipulacion. El
+literal `00:00.010` tambien existe en la DLL local
+`Microsoft.Data.Tools.Schema.Sql.dll`, junto a mensajes de integracion del motor.
+
+El SQL nuevo tiene SHA-256
+`3e5b2e6bb5f8a185472096fb23933fec9756715161ffe40f81ee3fd27018023f`;
+no sustituye la evidencia del runner ni autoriza ese hash. Una segunda generacion
+con `/p:ScriptNewConstraintValidation=True` explicito produjo el mismo hash y
+tampoco incluyo `WITH CHECK CHECK CONSTRAINT` al final. No hubo Publish, DDL, DML
+ni concesion de permisos remotos.
+
+Como primera proteccion local adicional, `Invoke-DatabaseDeployment.ps1` bloqueo
+Publish si el SQL generado contiene el token `NOCHECK`, antes de consultar la
+aprobacion o invocar Publish. Es un gate lexical conservador: tambien rechaza
+scripts con validacion diferida y menciones en comentarios; no pretende analizar
+SQL arbitrario ni acreditar su estado final. Evaluate sigue generando/retornando
+evidencia para diagnostico. No existe flag de bypass ni se reemplazan clausulas
+del script a mano. Habilitar un plan con validacion diferida requiere implementar
+y probar una comprobacion de confianza final, no quitar este gate.
+
+Las tres regresiones nuevas fallaron antes del cambio (CHECK sin validar, FK sin
+validar y constraint deshabilitada); despues, 51 pruebas de review, recuperacion y
+workflow pasaron, incluida la preservacion de Evaluate. Falta corregir/revisar
+la generacion del plan, construir/evaluar el nuevo candidato y obtener revision
+autenticada de sus hashes. Este bloqueo no completa T033 ni habilita Staging.
+
+El issue #11 no contiene una revision identificada para `42669270551` ni los
+campos obligatorios de revision exacta. Se agrego localmente
+`.github/workflows/deploy_authcraft-api-staging.yml` para reanudar el run sin
+reconstruirlo; aun no se subio ni se ejecuto. El publicador SQL sigue con permisos
+de lectura/revision, no se verifico Publish, y no se autoriza Publish con el
+preflight. Los cuatro nombres de secretos de smoke sintetico ya estan configurados
+en GitHub Actions; sus valores no se consultaron. T033/T035/T037 y la publicacion
+Staging siguen pendientes.
+
+Implementacion local del workflow de reanudacion: valida que el run original y sus
+cuatro artefactos pertenezcan al mismo `workflow_dispatch` exitoso de `main`;
+vuelve a ejecutar el preflight actual y exige que el resultado siga siendo
+`ready_for_review` con `deployment_authorized=false`; `Invoke-DatabaseDeployment.ps1`
+consulta y revalida el comentario autenticado exacto antes de SQL Publish; luego
+despliega el ZIP de ese mismo run y ejecuta el smoke con credenciales sinteticas.
+El gate de secretos se ejecuta antes del login OIDC. No hay grants automaticos,
+rollback SQL ni ruta Production. Pruebas focalizadas de
+`StagingPublisherVerificationTests` pasan 20/20; la verificacion integral del
+workflow remoto sigue pendiente.
+
+#### Correccion versionada y ensayo local verificado
+
+Se implemento la opcion autorizada de validacion explicita en post-deployment:
+
+- Los checks de status de memberships y tenants usan ORs equivalentes al modelo
+  extraido. El nuevo DeployReport contra Staging ya no elimina ni recrea esos checks.
+- `postdeploys/ValidateConstraints.sql` valida las siete constraints revisadas con
+  `WITH CHECK CHECK CONSTRAINT` y comprueba su estado habilitado/confiable.
+  El guard se limita a ese conjunto: durante una instalacion inicial, DacFx puede
+  validar otras constraints despues del post-deployment. No se altera ni repara
+  silenciosamente ninguna constraint ajena.
+- El publicador solo admite `WITH NOCHECK ADD CONSTRAINT` para esas tablas/nombres
+  y exige el bloque versionado exacto. Despues solo permite separadores GO,
+  mensajes PRINT literales, USE del DatabaseName y validaciones adicionales del
+  mismo conjunto generadas por DacFx. SQL posterior arbitrario, constraints fuera
+  del conjunto, deshabilitaciones o un bloque modificado bloquean Publish.
+  Sigue siendo un gate conservador de forma conocida, no un parser SQL general
+  ni un reemplazo de la revision autenticada del plan.
+
+Validacion real: build SQL sin errores ni advertencias; 58 pruebas focalizadas con
+LocalDB, review, recuperacion y workflow aprobadas, sin omisiones. La base LocalDB descartable
+se publico correctamente, termino sin checks/FKs deshabilitadas o no confiables,
+rechazo datos existentes invalidos con SQL 547 al validar y recupero la confianza
+tras limpiar exclusivamente el fixture. La base de desarrollo existente no se
+modifico y la base de prueba se elimino.
+
+La nueva evaluacion contra Staging uso exclusivamente DeployReport/Script:
+ALTER de invitations y creacion de una FK y cuatro checks, sin DROP de constraints.
+Incluye las siete validaciones explicitas y DacFx tambien agrega su propia fase
+final de validacion; esta generacion no contiene WAITFOR. El SQL real paso el
+gate exacto del publicador, sin invocar Publish.
+
+Hashes SHA-256 de esta evaluacion local (no son un release de Actions aprobado):
+
+- DACPAC: `b3cde09b2436ed3cfe52ca5f86949b12bc672974d3024f016a065979e900a8a3`.
+- Report: `a01e0e92a079f14ddab1a4a9c39d16b2db235374852cb6cb42314f8f5da31b64`.
+- SQL: `38c0445cd7682bca09cbdb98cedefd793b7864cca8058805160d8ccef52014aa`.
+
+La evidencia se conserva fuera del repositorio en la carpeta de sesion
+`files/staging-constraint-validation`. El release `42669270551` contiene el DACPAC
+anterior y no incorpora esta correccion: no reanudarlo para desplegarla. Falta
+versionar/subir los cambios, generar un nuevo release de Actions, evaluar y revisar
+sus hashes exactos y verificar concesion/revocacion de permisos antes de publicar.
+No se ejecutaron DDL/DML remotos, no se concedieron permisos y no se toco Production.
+
+#### Preparacion del nuevo release autorizada
+
+El usuario autorizo commit/push a main y ejecutar Actions para generar/evaluar un
+nuevo release, exclusivamente sin Publish. Antes del commit se verifico que
+HEAD y origin/main no divergian y pasaron las 147 pruebas de la seleccion exacta
+del workflow, incluida la integracion LocalDB habilitada, sin omisiones.
+El dispatch autorizado corresponde solo a `main_authcraft-api-staging.yml` con
+evaluacion SQL y bootstrap inicial de baseline desconocido; no al workflow
+`deploy_authcraft-api-staging.yml`. Esta autorizacion no concede permisos SQL,
+no aprueba hashes nuevos ni permite publicar API/SQL.
 
 T028/T029/T032 estan completos. T033/T035/T037/T038/T040/T041 siguen pendientes.
 No habilitar Production, no conceder aun `db_owner` y no publicar Staging hasta que

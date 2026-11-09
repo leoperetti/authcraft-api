@@ -267,6 +267,42 @@ try {
         return
     }
 
+    $deploymentSql = Get-Content -LiteralPath $scriptPath -Raw
+    if ([Regex]::IsMatch($deploymentSql, '(?i)\bNOCHECK\b')) {
+        $validationPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'authcraft-db\postdeploys\ValidateConstraints.sql'
+        $validationSql = (Get-Content -LiteralPath $validationPath -Raw).Replace("`r`n", "`n").Trim()
+        # After the exact block, allow only DacFx's validation and progress statements.
+        $normalizedSql = $deploymentSql.Replace("`r`n", "`n")
+        $validationIndex = $normalizedSql.LastIndexOf("`n$validationSql", [StringComparison]::Ordinal)
+        $validationTail = if ($validationIndex -ge 0) {
+            $normalizedSql.Substring($validationIndex + 1 + $validationSql.Length)
+        } else { '' }
+        $validationTail = [Regex]::Replace($validationTail,
+            '(?im)^[ \t]*(?:GO[ \t]*$|PRINT[ \t]+N''(?:[^'']|'''')*''[ \t]*;|USE[ \t]+\[\$\(DatabaseName\)\][ \t]*;)', '')
+        $validationTargets = @{
+            invitations = @('FK_invitations_accepted_identity', 'CK_invitations_purpose',
+                'CK_invitations_registered_dni', 'CK_invitations_student_dni', 'CK_invitations_student_profile')
+            memberships = @('CK_memberships_status')
+            tenants = @('CK_tenants_status')
+        }
+        $unrecognizedSql = $deploymentSql
+        foreach ($tableName in $validationTargets.Keys) {
+            $constraintNames = ($validationTargets[$tableName] | ForEach-Object { [Regex]::Escape($_) }) -join '|'
+            $creationPattern = '(?im)^[ \t]*ALTER\s+TABLE\s+\[dbo\]\.\[' + $tableName +
+                '\]\s+WITH\s+NOCHECK\s+ADD\s+CONSTRAINT\s+\[(?:' + $constraintNames +
+                ')\]\s+(?:CHECK\s*\(|FOREIGN\s+KEY\s*\()'
+            $unrecognizedSql = [Regex]::Replace($unrecognizedSql, $creationPattern, '')
+            $checkingPattern = '(?im)^[ \t]*ALTER\s+TABLE\s+\[dbo\]\.\[' + $tableName +
+                '\]\s+WITH\s+CHECK\s+CHECK\s+CONSTRAINT\s+\[(?:' + $constraintNames + ')\]\s*;'
+            $validationTail = [Regex]::Replace($validationTail, $checkingPattern, '')
+        }
+        if ([string]::IsNullOrWhiteSpace($validationSql) -or
+            $validationIndex -lt 0 -or -not [string]::IsNullOrWhiteSpace($validationTail) -or
+            [Regex]::IsMatch($unrecognizedSql, '(?i)\bNOCHECK\b')) {
+            throw 'SQL plan contains NOCHECK without the exact final constraint validation block. Publication is blocked; regenerate and review the plan.'
+        }
+    }
+
     if ($ReviewIssueNumber -notmatch '^[1-9][0-9]*$') {
         throw 'Publish requires a GitHub issue with an authenticated deployment review.'
     }

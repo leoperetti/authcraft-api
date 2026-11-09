@@ -1,0 +1,302 @@
+name: Deploy reviewed AuthCraft Staging release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful package/evaluation run to resume without rebuilding
+        type: string
+        required: true
+      review_issue_number:
+        description: Open GitHub issue containing the authenticated review for this exact release
+        type: string
+        required: true
+      staging_baseline_sha:
+        description: Last verified Staging deployment commit, or unknown for a reviewed initial bootstrap
+        type: string
+        required: true
+        default: unknown
+      allow_initial_staging_bootstrap:
+        description: Confirm this is the one-time initial Staging release with an unknown baseline
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: authcraft-staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  resolve-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - name: Verify the original successful Staging release and retained evidence
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_RUN_ID -notmatch '^[1-9][0-9]*$') {
+            throw 'A valid original Staging release run ID is required.'
+          }
+          $workflowRun = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RELEASE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or
+              $workflowRun.id -cne [long]$env:RELEASE_RUN_ID -or
+              $workflowRun.repository.full_name -cne $env:GITHUB_REPOSITORY -or
+              $workflowRun.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or
+              $workflowRun.head_branch -cne 'main' -or
+              $workflowRun.event -cne 'workflow_dispatch' -or
+              $workflowRun.path -cne '.github/workflows/main_authcraft-api-staging.yml' -or
+              $workflowRun.status -cne 'completed' -or
+              $workflowRun.conclusion -cne 'success' -or
+              $workflowRun.head_sha -notmatch '^[a-f0-9]{40}$') {
+            throw 'The selected run is not a successful Staging package/evaluation run from main.'
+          }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RELEASE_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -ne @($jobs.jobs).Count) {
+            throw 'The original Staging run job history is incomplete.'
+          }
+          foreach ($requiredJob in @('validate', 'verify-staging-publisher', 'preflight-staging')) {
+            $matchingJobs = @($jobs.jobs | Where-Object { $_.name -ceq $requiredJob })
+            if ($matchingJobs.Count -ne 1 -or
+                $matchingJobs[0].status -cne 'completed' -or
+                $matchingJobs[0].conclusion -cne 'success') {
+              throw "The original Staging release did not pass $requiredJob."
+            }
+          }
+          $artifactResponse = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RELEASE_RUN_ID/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or
+              $artifactResponse.total_count -ne @($artifactResponse.artifacts).Count) {
+            throw 'The original Staging release artifact inventory is incomplete.'
+          }
+          foreach ($artifactName in @('api', 'dacpac', 'release-manifest', 'staging-schema-review')) {
+            $matchingArtifacts = @($artifactResponse.artifacts | Where-Object { $_.name -ceq $artifactName })
+            if ($matchingArtifacts.Count -ne 1 -or
+                $matchingArtifacts[0].expired -ne $false -or
+                [DateTimeOffset]::Parse($matchingArtifacts[0].expires_at) -le [DateTimeOffset]::UtcNow -or
+                [string]$matchingArtifacts[0].workflow_run.id -cne $env:RELEASE_RUN_ID -or
+                $matchingArtifacts[0].workflow_run.head_sha -cne $workflowRun.head_sha) {
+              throw "The original Staging release artifact $artifactName is missing, expired, duplicated, or mismatched."
+            }
+          }
+          "release_sha=$($workflowRun.head_sha)" | Add-Content -Path $env:GITHUB_OUTPUT
+
+  deploy-reviewed-release:
+    if: github.ref == 'refs/heads/main'
+    needs: resolve-release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Require synthetic Staging smoke credentials before remote changes
+        shell: pwsh
+        env:
+          AUTHCRAFT_STAGING_SMOKE_IDENTIFIER: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_IDENTIFIER }}
+          AUTHCRAFT_STAGING_SMOKE_PASSWORD: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_PASSWORD }}
+          AUTHCRAFT_STAGING_SMOKE_CLIENT_ID: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_CLIENT_ID }}
+          AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID }}
+        run: |
+          $requiredSecrets = @(
+            'AUTHCRAFT_STAGING_SMOKE_IDENTIFIER',
+            'AUTHCRAFT_STAGING_SMOKE_PASSWORD',
+            'AUTHCRAFT_STAGING_SMOKE_CLIENT_ID',
+            'AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID'
+          )
+          foreach ($secretName in $requiredSecrets) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($secretName))) {
+              throw "Required synthetic Staging smoke secret $secretName is not configured."
+            }
+          }
+          if ($env:AUTHCRAFT_STAGING_SMOKE_CLIENT_ID -cne $env:AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID) {
+            throw 'Synthetic Staging smoke client and tenant identifiers must match.'
+          }
+
+      - name: Check out trusted deployment scripts
+        uses: actions/checkout@v4
+
+      - name: Check out the exact candidate source for provenance validation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.release_sha }}
+          path: candidate-source
+
+      - name: Download the exact original Staging release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: api
+          path: ${{ runner.temp }}/staging-release/api
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Download the exact original Staging DACPAC
+        uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          path: ${{ runner.temp }}/staging-release/dacpac
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Download the exact original release manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/staging-release/manifest
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Download the exact reviewed SQL evaluation evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-schema-review
+          path: ${{ runner.temp }}/staging-release/schema-review
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Log in to the Staging publisher through OIDC
+        uses: azure/login@v2
+        with:
+          client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Verify release provenance and current Staging gates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
+          STAGING_BASELINE_SHA: ${{ inputs.staging_baseline_sha }}
+          ALLOW_INITIAL_STAGING_BOOTSTRAP: ${{ inputs.allow_initial_staging_bootstrap }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDirectory = Join-Path $env:RUNNER_TEMP 'staging-release'
+          $apiPath = Join-Path $artifactDirectory 'api\api.zip'
+          $dacpacPath = Join-Path $artifactDirectory 'dacpac\authcraft-db.dacpac'
+          $manifestPath = Join-Path $artifactDirectory 'manifest\release-manifest.json'
+          $schemaReviewPath = Join-Path $artifactDirectory 'schema-review'
+          if (@(Get-ChildItem -LiteralPath $schemaReviewPath -File -Filter '*-report.xml').Count -ne 1 -or
+              @(Get-ChildItem -LiteralPath $schemaReviewPath -File -Filter '*-script.sql').Count -ne 1) {
+            throw 'The original reviewed SQL report and script are missing or ambiguous.'
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.commit_sha -cne $env:RELEASE_COMMIT_SHA -or
+              [string]$manifest.run_id -cne $env:RELEASE_RUN_ID) {
+            throw 'The original release manifest does not match the selected Staging run.'
+          }
+          $preflightParameters = @{
+            ManifestPath = $manifestPath
+            ApiArtifactPath = $apiPath
+            DatabaseArtifactPath = $dacpacPath
+            ExpectedCommitSha = $env:RELEASE_COMMIT_SHA
+            ExpectedRunId = $env:RELEASE_RUN_ID
+            GitHubRef = 'refs/heads/main'
+            TargetEnvironment = 'staging'
+            RepositoryPath = (Resolve-Path '.\candidate-source').Path
+          }
+          if ($env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
+            if ($env:STAGING_BASELINE_SHA -cne 'unknown') {
+              throw 'Initial Staging bootstrap requires an unknown baseline.'
+            }
+            $preflightParameters.LastSuccessfulCommitSha = 'unknown'
+            $preflightParameters.AllowInitialStagingBootstrap = $true
+          } else {
+            $preflightParameters.LastSuccessfulCommitSha = $env:STAGING_BASELINE_SHA
+          }
+          $preflightOutput = & .\scripts\Test-ReleasePreflight.ps1 @preflightParameters
+          if ($LASTEXITCODE -ne 0) { throw 'Staging preflight failed. No deployment was attempted.' }
+          $preflight = ($preflightOutput -join "`n") | ConvertFrom-Json
+          if ($preflight.state -cne 'ready_for_review' -or
+              $preflight.target -cne 'staging' -or
+              $preflight.commit_sha -cne $env:RELEASE_COMMIT_SHA -or
+              [string]$preflight.run_id -cne $env:RELEASE_RUN_ID -or
+              $preflight.deployment_authorized -ne $false) {
+            throw 'Staging preflight did not return the expected review-only state.'
+          }
+          $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Publish the reviewed Staging database plan
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
+          REVIEW_ISSUE_NUMBER: ${{ inputs.review_issue_number }}
+          STAGING_BASELINE_SHA: ${{ inputs.staging_baseline_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $account = az account show --output json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or
+              $account.id -cne '948a8f49-fd90-40d9-8fa9-12f722768a7a' -or
+              $account.tenantId -cne 'b7bd0c07-88dc-4c47-81ba-608fd7607a82' -or
+              $account.user.type -cne 'servicePrincipal' -or
+              $account.user.name -cne 'a2382f63-d653-47f3-82ca-9f2696f63f0a') {
+            throw 'Azure login is not the expected Staging publisher identity.'
+          }
+          $accessToken = az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
+            throw 'A Staging SQL access token could not be acquired.'
+          }
+          Write-Output "::add-mask::$accessToken"
+          $env:AUTHCRAFT_SQL_ACCESS_TOKEN = $accessToken
+          try {
+            $publishOutput = & .\scripts\Invoke-DatabaseDeployment.ps1 `
+              -Mode Publish `
+              -TargetEnvironment staging `
+              -DacpacPath (Join-Path $env:RUNNER_TEMP 'staging-release\dacpac\authcraft-db.dacpac') `
+              -ManifestPath (Join-Path $env:RUNNER_TEMP 'staging-release\manifest\release-manifest.json') `
+              -ExpectedCommitSha $env:RELEASE_COMMIT_SHA `
+              -ExpectedRunId $env:RELEASE_RUN_ID `
+              -ReviewIssueNumber $env:REVIEW_ISSUE_NUMBER `
+              -StagingBaselineSha $env:STAGING_BASELINE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'The reviewed Staging database deployment failed.' }
+            $publishResult = ($publishOutput -join "`n") | ConvertFrom-Json
+            if ($publishResult.state -cne 'published' -or
+                $publishResult.target_environment -cne 'staging' -or
+                $publishResult.commit_sha -cne $env:RELEASE_COMMIT_SHA -or
+                [string]$publishResult.run_id -cne $env:RELEASE_RUN_ID) {
+              throw 'The database publisher did not confirm the exact reviewed Staging release.'
+            }
+            $publishOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+          finally {
+            $env:AUTHCRAFT_SQL_ACCESS_TOKEN = $null
+            $accessToken = $null
+          }
+
+      - name: Deploy the same API package to Staging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $apiPackage = Join-Path $env:RUNNER_TEMP 'staging-release\api\api.zip'
+          az webapp deploy --resource-group AuthCraft --name authcraft-api-staging --src-path $apiPackage --type zip --async false
+          if ($LASTEXITCODE -ne 0) { throw 'Staging API package deployment failed after the database step; inspect Staging before retrying.' }
+
+      - name: Verify Staging health, synthetic login, and tenant roles
+        shell: pwsh
+        env:
+          AUTHCRAFT_STAGING_SMOKE_IDENTIFIER: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_IDENTIFIER }}
+          AUTHCRAFT_STAGING_SMOKE_PASSWORD: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_PASSWORD }}
+          AUTHCRAFT_STAGING_SMOKE_CLIENT_ID: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_CLIENT_ID }}
+          AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID: ${{ secrets.AUTHCRAFT_STAGING_SMOKE_TENANT_CLIENT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\Test-StagingRelease.ps1 -ExpectedVersion '${{ needs.resolve-release.outputs.release_sha }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Staging release smoke verification failed.' }
