@@ -134,13 +134,18 @@ public sealed class DeploymentPipelineTests
             dacpac_sha256={{new string('b', 64)}}
             block_on_possible_data_loss=true
             drop_objects_not_in_source=false
+            script_database_options=false
             deploy_report_sha256={{new string('c', 64)}}
             deploy_script_sha256={{new string('d', 64)}}
             '@
             $valid = Test-DeploymentReviewRecord -Body $body -Author 'leoperetti' -AllowedReviewer 'leoperetti' -RunId '12345' -CommitSha '{{new string('a', 40)}}' -TargetEnvironment 'staging' -DatabaseServer 'authcraftdbbrasil.database.windows.net' -DatabaseName 'authcraft-db-staging' -DacpacSha256 '{{new string('b', 64)}}' -ReportSha256 '{{new string('c', 64)}}' -ScriptSha256 '{{new string('d', 64)}}'
             $wrongAuthor = Test-DeploymentReviewRecord -Body $body -Author 'other-user' -AllowedReviewer 'leoperetti' -RunId '12345' -CommitSha '{{new string('a', 40)}}' -TargetEnvironment 'staging' -DatabaseServer 'authcraftdbbrasil.database.windows.net' -DatabaseName 'authcraft-db-staging' -DacpacSha256 '{{new string('b', 64)}}' -ReportSha256 '{{new string('c', 64)}}' -ScriptSha256 '{{new string('d', 64)}}'
             $wrongPlan = Test-DeploymentReviewRecord -Body $body -Author 'leoperetti' -AllowedReviewer 'leoperetti' -RunId '12345' -CommitSha '{{new string('a', 40)}}' -TargetEnvironment 'staging' -DatabaseServer 'authcraftdbbrasil.database.windows.net' -DatabaseName 'authcraft-db-staging' -DacpacSha256 '{{new string('b', 64)}}' -ReportSha256 '{{new string('e', 64)}}' -ScriptSha256 '{{new string('d', 64)}}'
-            if ($valid -and -not $wrongAuthor -and -not $wrongPlan) { exit 0 }
+            $wrongOptionsBody = $body.Replace('script_database_options=false', 'script_database_options=true')
+            $wrongOptions = Test-DeploymentReviewRecord -Body $wrongOptionsBody -Author 'leoperetti' -AllowedReviewer 'leoperetti' -RunId '12345' -CommitSha '{{new string('a', 40)}}' -TargetEnvironment 'staging' -DatabaseServer 'authcraftdbbrasil.database.windows.net' -DatabaseName 'authcraft-db-staging' -DacpacSha256 '{{new string('b', 64)}}' -ReportSha256 '{{new string('c', 64)}}' -ScriptSha256 '{{new string('d', 64)}}'
+            $missingOptionsBody = $body -replace '(?im)^script_database_options=false\r?\n', ''
+            $missingOptions = Test-DeploymentReviewRecord -Body $missingOptionsBody -Author 'leoperetti' -AllowedReviewer 'leoperetti' -RunId '12345' -CommitSha '{{new string('a', 40)}}' -TargetEnvironment 'staging' -DatabaseServer 'authcraftdbbrasil.database.windows.net' -DatabaseName 'authcraft-db-staging' -DacpacSha256 '{{new string('b', 64)}}' -ReportSha256 '{{new string('c', 64)}}' -ScriptSha256 '{{new string('d', 64)}}'
+            if ($valid -and -not $wrongAuthor -and -not $wrongPlan -and -not $wrongOptions -and -not $missingOptions) { exit 0 }
             exit 1
             """;
         File.WriteAllText(scriptPath, script);

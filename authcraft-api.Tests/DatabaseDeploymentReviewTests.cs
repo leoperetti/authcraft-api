@@ -39,6 +39,8 @@ public sealed class DatabaseDeploymentReviewTests
     [InlineData("dacpac-changed-on-recheck")]
     [InlineData("destructive-plan")]
     [InlineData("reviewer-override")]
+    [InlineData("wrong-options")]
+    [InlineData("missing-options")]
     public void Publish_BlocksInvalidOrChangedReviewWithoutModification(string scenario)
     {
         using var sandbox = new ReviewSandbox();
@@ -183,6 +185,8 @@ public sealed class DatabaseDeploymentReviewTests
                     $dacpacHash = (Get-FileHash -LiteralPath '{{dacpacPath}}' -Algorithm SHA256).Hash.ToLowerInvariant()
                     $reportHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy-report.xml")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
                     $sqlHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy.sql")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $scriptDatabaseOptions = 'false'
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-options') { $scriptDatabaseOptions = 'true' }
                     $body = @"
                 deployment_review=$decision
                 run_id=12345
@@ -193,9 +197,13 @@ public sealed class DatabaseDeploymentReviewTests
                 dacpac_sha256=$dacpacHash
                 block_on_possible_data_loss=true
                 drop_objects_not_in_source=false
+                script_database_options=$scriptDatabaseOptions
                 deploy_report_sha256=$reportHash
                 deploy_script_sha256=$sqlHash
                 "@
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-options') {
+                        $body = $body -replace '(?m)^script_database_options=.*\r?\n', ''
+                    }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'duplicate-decision') { $body += "`ndeployment_review=rejected" }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'plan-drift') { Set-Content -LiteralPath $env:REVIEW_TEST_DRIFT_PATH -Value 'changed' }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'dacpac-changed' -or

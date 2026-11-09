@@ -116,6 +116,9 @@ DeployReport/Script y Publish usan mismas opciones:
 `BlockOnPossibleDataLoss=True`, `DropObjectsNotInSource=False` y
 `ScriptDatabaseOptions=False` para no alterar opciones de la base destino ni
 requerir permisos `ALTER DATABASE` por diferencias ajenas al esquema del DACPAC.
+El registro autenticado de revisión debe incluir exactamente
+`script_database_options=false` junto con las demás opciones y hashes; una opción
+ausente o distinta invalida la aprobación.
 Compatible significa que API anterior y candidata pueden operar con el esquema
 resultante, incluidos postdeploy y cambios dependientes de datos.
 Cambios destructivos/contractivos no pasan el flujo automático.

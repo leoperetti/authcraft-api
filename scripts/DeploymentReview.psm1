@@ -27,6 +27,7 @@ function Test-DeploymentReviewRecord {
         dacpac_sha256 = $DacpacSha256.ToLowerInvariant()
         block_on_possible_data_loss = 'true'
         drop_objects_not_in_source = 'false'
+        script_database_options = 'false'
         deploy_report_sha256 = $ReportSha256.ToLowerInvariant()
         deploy_script_sha256 = $ScriptSha256.ToLowerInvariant()
     }
