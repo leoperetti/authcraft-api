@@ -9,17 +9,22 @@ pruebas. No pertenecen a esta feature y no se revierten. La solucion ya incluye
 El workflow Production remoto (ID `374894897`) esta `disabled_manually`; el de
 Staging (ID `407226559`) permanece `active`. En la revalidacion de solo lectura
 del 2026-11-09, `main` remoto y local coinciden en
-`e9713e2b27f0af21447463a40a31fa5322a888aa`; no habia ejecuciones Production
+`6a2a123149073b84bd61b0fc76a781294fdc7ffa`; no habia ejecuciones Production
 encoladas ni en curso entre las 15 consultadas. No se modifico el servicio
 Production.
 
 El workflow Staging valida paquetes y, cuando se solicita, ejecuta el preflight
 de procedencia, baseline y metadatos ARM. El preflight solo deja el release
 `ready_for_review` con `deployment_authorized=false`: no publica SQL ni API.
-El run [42637441215](https://github.com/leoperetti/authcraft-api/actions/runs/42637441215)
-paso `validate`, `verify-staging-publisher` y `preflight-staging`; no hubo
-Publish, postdeploy, despliegue API ni smoke. La publicación sigue bloqueada
-hasta completar los gates y obtener autorizacion especifica para el release.
+El run [42664956766](https://github.com/leoperetti/authcraft-api/actions/runs/42664956766)
+del commit `6a2a123149073b84bd61b0fc76a781294fdc7ffa` paso `validate`,
+`verify-staging-publisher` y `preflight-staging`; DeployReport/Script se
+retuvieron correctamente. No hubo Publish, postdeploy, despliegue API ni smoke.
+El run previo [42660168304](https://github.com/leoperetti/authcraft-api/actions/runs/42660168304)
+paso build/evaluacion, pero fallo al cargar el artefacto porque el workflow
+buscaba nombres estaticos; el patron se corrigio y verifico en el run siguiente.
+La publicación sigue bloqueada hasta completar los gates y obtener autorizacion
+especifica para el release.
 
 Revision de Actions 2026-11-06: el workflow staging remoto sigue activo y su ultima
 ejecucion (`41882690684`) fallo en `Build with dotnet` con `MSB4278` al intentar
@@ -860,9 +865,9 @@ La revision autenticada debe vincular `run_id`, `commit_sha`,
 `script_database_options=false` y hashes report/script. Cada campo debe aparecer
 una sola vez; ausencia, duplicacion o deriva bloquean Publish. El run preliminar
 `42563790492` no se debe aprobar: su SHA SQL coincide, pero el codigo de revision
-aun no exigia `script_database_options`. El run `42564903495` tampoco se puede
-aprobar tras cambiar el contrato/codigo: debe generarse una nueva evaluacion del
-release final y revisarse con todos los campos requeridos.
+aun no exigia `script_database_options`. El run `42564903495` no se debe aprobar tras cambiar el contrato/codigo. Una
+nueva evaluacion del release final se registro abajo; aun requiere revision
+autenticada con todos los campos requeridos.
 
 La API Staging continua devolviendo 404 en `/health/live`; la version de la API
 actual no esta acreditada. El ultimo log de OneDeploy de App Service registra el
@@ -874,6 +879,38 @@ revision autenticada del release exacto acepta expresamente el baseline, compati
 API, impacto de datos y recuperacion antes de Publish. Esa decision no aprueba el SQL
 ni autoriza una publicacion por si sola. Production sigue sin publicador efectivo y
 no se modifico.
+
+### Evaluacion posterior de Staging: run 42664956766
+
+El commit `6a2a123149073b84bd61b0fc76a781294fdc7ffa` completo con exito los
+jobs `validate`, `verify-staging-publisher` y `preflight-staging`. La evaluacion
+DacFx fue de solo lectura y el preflight devolvio el estado de revision
+`ready_for_review`, `deployment_authorized=false` y baseline inicial `unknown`.
+Los artefactos `api`, `dacpac`, `release-manifest` y `staging-schema-review` se
+retuvieron por 30 dias. La evaluacion no modifico SQL ni API.
+
+Hashes SHA-256 del release y plan:
+
+- DACPAC: `9fe13dc1de83251e255b5de934ce2866e88b7b6a2f0202b6ce7e16f09d9b6458`
+- API ZIP: `793da3a0bf7f30d1c9eb5dd9b0ab0815716ba3c8949c7cda9b8fa1cd5bd0a097`
+- DeployReport: `e06fff4b57ff74c22cce5d7241a30a031378f7d2ba084e74929ca5d4bbd8c466`
+- SQL: `3dfab7b37839bbc09b4c00e7d1768df6cd27f569a34c7cd7fe131fb9631c9947`
+
+El DeployReport no contiene Alerts. El plan coincide con la evaluacion anterior:
+elimina/recrea dos CHECK constraints, altera `dbo.invitations` para agregar
+columnas nullable y `row_version`, crea una FK y seis checks `WITH NOCHECK`, e
+inserta condicionalmente `google`, `apple` y `github` en `dbo.providers`. El script
+no contiene `DELETE`, `TRUNCATE`, `DROP TABLE` ni `ALTER DATABASE`. Los checks
+`WITH NOCHECK` no validan retroactivamente filas existentes. Esta inspeccion no
+demuestra compatibilidad con los datos ni con la API anterior/candidata.
+
+El issue #11 no contiene una revision autenticada que identifique el run
+`42664956766` ni el campo obligatorio `script_database_options=false`; la
+revision debe vincular los hashes, el baseline, el destino y las aceptaciones
+explicitas requeridas antes de que T033 pueda avanzar. La comprobacion OIDC de
+`verify-staging-publisher` confirma solo permisos de lectura/revision; no verifica
+ni concede privilegios DacFx de Publish. No se obtuvo `db_owner` ni se intento
+Publish. Por tanto T033, T035, T037 y la publicacion Staging siguen pendientes.
 
 T028/T029/T032 estan completos. T033/T035/T037/T038/T040/T041 siguen pendientes.
 No habilitar Production, no conceder aun `db_owner` y no publicar Staging hasta que

@@ -218,8 +218,22 @@ No agregar tablas para el modelo operativo de publicaciones.
   unicos, y la salida publicada expone sus rutas y hashes. Pruebas mock verifican
   preservacion y correspondencia SHA-256; no se conecto Azure ni se ejecuto Publish
   remoto. El gate operacional/revision exacta de T033 sigue pendiente.
+
+  Evaluacion autorizada 2026-11-09: run 42664956766, commit
+  6a2a123149073b84bd61b0fc76a781294fdc7ffa, paso validate, login OIDC/revision
+  SQL de solo lectura y preflight. Report/script se retuvieron con los mismos
+  hashes e impacto documentados en `docs\environments.md`; el estado es
+  ready_for_review con deployment_authorized=false y baseline unknown. No existe
+  comentario autenticado del issue #11 para este run ni incluye
+  `script_database_options=false`; Publish sigue bloqueado.
 - [X] T034 [US3] Implementar `scripts\Test-StagingRelease.ps1` para host resuelto desde ARM, HTTPS, status/version exactos en salud, login/roles de tenant sintético, timeout finito/reintentos acotados y resultado fallido explícito; credenciales/token en memoria protegida, sin signup/invitaciones/reset ni notificaciones reales.
 - [ ] T035 [US3] Completar el workflow activo de Staging en `.github\workflows\main_authcraft-api-staging.yml`: PR solo build/pruebas sin Azure; workflow_dispatch en main construye API y SQL una vez, ejecuta las pruebas focalizadas, publica manifiesto/paquetes con retención acordada, evalúa esquema, verifica procedencia/baseline/metadatos live y exige revisión autenticada antes de cualquier Publish/API/smoke. Mantener el workflow Production separado y `disabled_manually`, sin publicador efectivo; limitar id-token:write a jobs Azure, serializar publicación completa con cancel-in-progress:false y permitir reanudar el mismo release tras revisión sin reconstrucción. La revisión SQL Staging no sustituye aprobación protegida Production. El job local `preflight-staging` solo prepara revisión y nunca despliega.
+
+  Validacion 2026-11-09: run 42664956766 completo build, pruebas, evaluacion
+  DacFx y preflight review-only; el artefacto de esquema se retuvo con nombres
+  unicos tras corregir el path del upload. El workflow sigue sin jobs de Publish,
+  despliegue API o smoke; T035 permanece pendiente hasta implementar y probar el
+  flujo gated de reanudacion del mismo release.
 - [X] T036 [US3] Con autorización explícita, configurar ASPNETCORE_ENVIRONMENT=Staging, vault esperado y secretos exclusivos requeridos en `authcraft-api-staging`/`authcraft-vault-staging`; revisar configuración pública production sin publicarla ni activar transición JWT/alterar bootstrap. Documentar claves/capacidades opcionales y fuentes en `docs\environments.md`, sin copiar secretos production.
 - [ ] T037 [US3] Con autorización explícita, establecer/vincular `authcraft-api-st-id-97cc` como publicador OIDC main limitado a staging, verificar issuer/audiencia/prefijo inmutable y usuario SQL contenido con permisos DacFx mínimos probados en su propia base; no conceder permisos production ni exigir environments privados no disponibles. Registrar verificación de token/scope sin JWT completo en `docs\environments.md`.
 
@@ -292,6 +306,11 @@ No agregar tablas para el modelo operativo de publicaciones.
   exclusivamente en la Web App Staging. No concede permisos SQL de datos ni acceso
   a valores de Key Vault; no se asignó `db_owner`. Falta verificar el preflight
   con el OIDC real y completar/revocar el permiso SQL temporal de una sola publicación.
+
+  Evaluacion 2026-11-09: run 42664956766 confirmo login OIDC y el contrato de
+  permisos de lectura/revision del publicador; DeployReport/Script se generaron
+  con exito. Esto no acredita permisos DacFx para Publish ni autoriza el permiso
+  SQL temporal; T037 sigue pendiente.
 
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api-staging.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 
