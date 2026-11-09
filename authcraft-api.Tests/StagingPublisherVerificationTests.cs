@@ -35,6 +35,8 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("actions/download-artifact@v4", diagnostic, StringComparison.Ordinal);
         Assert.Contains("  preflight-staging:", diagnostic, StringComparison.Ordinal);
         Assert.Contains("Test-ReleasePreflight.ps1", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("staging-evaluation-*-report.xml", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("staging-evaluation-*-script.sql", diagnostic, StringComparison.Ordinal);
         Assert.Contains("allow_initial_staging_bootstrap", validation, StringComparison.Ordinal);
         Assert.Contains("last_successful_staging_commit_sha", validation, StringComparison.Ordinal);
         Assert.Contains("actions: read", validation, StringComparison.Ordinal);

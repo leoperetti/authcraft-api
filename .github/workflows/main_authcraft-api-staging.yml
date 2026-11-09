@@ -201,8 +201,8 @@ jobs:
         with:
           name: staging-schema-review
           path: |
-            ${{ runner.temp }}/staging-schema-review/staging-deploy-report.xml
-            ${{ runner.temp }}/staging-schema-review/staging-deploy.sql
+            ${{ runner.temp }}/staging-schema-review/staging-evaluation-*-report.xml
+            ${{ runner.temp }}/staging-schema-review/staging-evaluation-*-script.sql
           if-no-files-found: error
           retention-days: 30
 
