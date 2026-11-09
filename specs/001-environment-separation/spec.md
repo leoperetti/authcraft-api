@@ -8,6 +8,12 @@
 
 **Input**: User description: "Necesito que hagamos un spec al igual que con cekide-api, 001-environment-separation, crear y verificar los ambientes existentes, necesito development para mi localhost, staging y production. Los recursos de Azure ya están creados. Pero necesitamos revisar las instrucciones para Github Actions."
 
+## Clarifications
+
+### Session 2026-11-07
+
+- Q: ¿Qué esperás que ocurra con `docs/production-release-checklist.md` en cada despliegue de Production: que sea una guía fija para completar, que Actions genere un informe descargable por ejecución, o que Actions actualice y suba ese mismo archivo al repositorio? → A: Mantener una checklist fija en `docs/` y generar por cada ejecución un informe descargable como artefacto de GitHub Actions; no sobrescribir ni hacer commits automáticos del archivo.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Identificar y verificar los tres ambientes (Priority: P1)
@@ -75,6 +81,7 @@ Como responsable de production, necesito aprobar una versión validada en stagin
 3. **Given** una aprobación rechazada o ausente, **When** se consulta production, **Then** continúa disponible la versión previa y no se modifica su esquema.
 4. **Given** una publicación o actualización de datos fallida, **When** se aplica la guía de recuperación, **Then** se detienen las etapas restantes y se restablece una versión compatible sin restauraciones ni reversiones destructivas automáticas.
 5. **Given** dos solicitudes de publicación simultáneas o una versión candidata superada, **When** se intenta promoverlas, **Then** no se intercalan cambios sobre el mismo destino y se impide reemplazar involuntariamente una versión más reciente.
+6. **Given** cualquier intento de publicación de Production, **When** una validación falla o el proceso termina, **Then** el run ofrece un informe en español descargable con la etapa, causa sanitizada y siguiente paso; las etapas posteriores se identifican como no ejecutadas.
 
 ---
 
@@ -111,13 +118,14 @@ Como responsable de production, necesito aprobar una versión validada en stagin
 - **FR-015**: El equipo MUST disponer de instrucciones para fallos parciales y recuperación del servicio y sus datos. No se permiten restauraciones ni reversiones destructivas automáticas de production.
 - **FR-016**: La revisión MUST reconciliar los workflows existentes localmente y en GitHub, sus disparadores, destinos, permisos, configuración protegida y despliegue de base de datos. Las instrucciones MUST reflejar el flujo vigente y eliminar o deshabilitar rutas alternativas que eviten sus controles.
 - **FR-017**: El trabajo MUST reutilizar los recursos Azure existentes, preservar los contratos y comportamiento funcional de AuthCraft y no crear, eliminar, recrear ni cambiar capacidad de recursos sin autorización explícita. Las comprobaciones MUST ser no destructivas y no enviar notificaciones a usuarios reales.
+- **FR-018**: Cada intento de publicación de Production MUST generar un informe descargable vinculado a su ejecución de GitHub Actions, tanto si termina correctamente como si falla. En lenguaje claro en español, el informe MUST resumir etapa, resultado, versión, destino, comprobaciones, aprobación y evidencia de revisión del esquema; ante fallos MUST indicar la etapa, una causa sanitizada y el siguiente paso recomendado. MUST indicar qué artefactos de reporte/script están disponibles, excluir secretos y datos personales, conservarse durante 30 días y no sobrescribir ni generar commits automáticos en `docs/production-release-checklist.md`. Ese archivo MUST ser una guía fija de revisión, no el informe de una ejecución.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Ambiente**: Contexto development, staging o production con propósito, ubicación, configuración y límites de acceso propios.
 - **Asignación de recurso**: Relación entre un ambiente y sus recursos existentes, incluyendo dependencias compartidas, permisos, evidencia y estado de verificación.
 - **Versión candidata**: Cambio identificable con paquetes de aplicación y esquema que se evalúa en staging y puede promoverse sin reconstrucción.
-- **Registro de publicación**: Evidencia del destino, versión, validaciones, aprobación, resultado y acciones de recuperación de una ejecución.
+- **Registro de publicación**: Evidencia por ejecución descargable desde GitHub Actions del destino, versión, validaciones, aprobación, resultado y acciones de recuperación; no se versiona automáticamente en el repositorio.
 
 ## Success Criteria *(mandatory)*
 
@@ -129,6 +137,7 @@ Como responsable de production, necesito aprobar una versión validada en stagin
 - **SC-004**: En al menos cinco pruebas de bloqueo —fallo de validación, aprobación ausente, destino cruzado, secreto requerido ausente y referencia no autorizada— se impide la promoción y no se alteran aplicación ni datos de production.
 - **SC-005**: Un responsable distinto del autor puede identificar la versión activa, consultar sus evidencias y completar un ensayo no destructivo del procedimiento de recuperación en un máximo de 30 minutos siguiendo la documentación.
 - **SC-006**: Durante la verificación y las pruebas de aislamiento se producen cero modificaciones cruzadas de datos, cero secretos expuestos y cero notificaciones a usuarios reales.
+- **SC-007**: El 100% de los intentos de publicación Production, incluidos los fallidos, produce un informe en español descargable asociado al run y retenido por 30 días; los fallos identifican etapa y siguiente paso sin exponer secretos ni datos personales, y no generan cambios automáticos en el repositorio.
 
 ## Assumptions
 

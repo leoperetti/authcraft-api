@@ -21,6 +21,8 @@
       "database": "authcraft-db-staging",
       "vault_name": "authcraft-vault-staging",
       "publisher": "authcraft-api-st-id-97cc",
+      "publisher_client_id": "a2382f63-d653-47f3-82ca-9f2696f63f0a",
+      "publisher_principal_id": "2a446033-801f-444c-985e-6519c4661632",
       "identity_purpose": "application_publish"
     },
     {

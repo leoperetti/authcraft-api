@@ -46,10 +46,18 @@ Hash distinto, versión superada o evidencia staging de otro release invalida pr
 - `release`, `target_environment`, `started_at`, `finished_at`.
 - `preflight_result`, `schema_report_reference`, `schema_result`, `application_result`,
   `health_result`, `authentication_result`.
+- `report_artifact_reference`, `report_retention_days`: `production-deployment-report`
+  artifact in the same GitHub Actions run, downloadable and retained for 30 days.
+- `failure_stage`, `sanitized_failure_summary`, `recommended_next_step`: plain-language
+  Spanish summary; empty when no failure; never contain secrets or personal data.
 - `approval_reference`, `approved_by`, `approved_at`: solo para production y vinculados
   al release/destino/report revisado; referencias del mecanismo protegido, no un booleano.
 - `result`: pending | blocked | failed | succeeded.
 - `recovery_reference`: procedimiento y evidencia de intervención cuando corresponde.
+
+El informe es un artefacto por run, no una fila de base de negocio ni una modificación
+automática de `docs/production-release-checklist.md`. Un fallo marca las etapas
+posteriores como no ejecutadas; el informe no convierte una omisión en éxito.
 
 Transiciones:
 

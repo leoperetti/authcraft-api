@@ -33,6 +33,12 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("name: staging-schema-review", diagnostic, StringComparison.Ordinal);
         Assert.Contains("success() && inputs.evaluate_staging_schema == true", diagnostic, StringComparison.Ordinal);
         Assert.Contains("actions/download-artifact@v4", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("  preflight-staging:", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("Test-ReleasePreflight.ps1", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("allow_initial_staging_bootstrap", validation, StringComparison.Ordinal);
+        Assert.Contains("last_successful_staging_commit_sha", validation, StringComparison.Ordinal);
+        Assert.Contains("actions: read", validation, StringComparison.Ordinal);
+        Assert.Contains("deployment_authorized -ne $false", diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain("webapps-deploy", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sql-action", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Invoke-DatabaseDeployment", workflow, StringComparison.OrdinalIgnoreCase);

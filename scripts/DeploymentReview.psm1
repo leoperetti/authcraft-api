@@ -10,10 +10,14 @@ function Test-DeploymentReviewRecord {
         [string]$DatabaseName,
         [string]$DacpacSha256,
         [string]$ReportSha256,
-        [string]$ScriptSha256
+        [string]$ScriptSha256,
+        [string]$StagingBaselineSha
     )
 
     if ($Author -cne $AllowedReviewer) {
+        return $false
+    }
+    if ($StagingBaselineSha -cne 'unknown' -and $StagingBaselineSha -notmatch '^[A-Fa-f0-9]{40}$') {
         return $false
     }
 
@@ -21,10 +25,14 @@ function Test-DeploymentReviewRecord {
         deployment_review = 'approved'
         run_id = $RunId
         commit_sha = $CommitSha.ToLowerInvariant()
+        staging_baseline_sha = $StagingBaselineSha.ToLowerInvariant()
         target_environment = $TargetEnvironment
         database_server = $DatabaseServer
         database_name = $DatabaseName
         dacpac_sha256 = $DacpacSha256.ToLowerInvariant()
+        api_compatibility = 'accepted'
+        data_impact = 'accepted'
+        recovery_plan = 'accepted'
         block_on_possible_data_loss = 'true'
         drop_objects_not_in_source = 'false'
         script_database_options = 'false'

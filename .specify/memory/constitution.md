@@ -1,10 +1,10 @@
 <!--
 Sync Impact Report
-Version change: 1.1.0 -> 2.0.0
-Modified principles: I. Preserve Layered Responsibilities; VII. Use Table-Specific Infrastructure Repositories
-Added sections: None
+Version change: 2.0.0 -> 2.1.0
+Modified principles: None
+Added sections: VIII. Keep Production Releases Protected
 Removed sections: None
-Follow-up TODOs: None
+Follow-up TODOs: Create the deferred Production release checklist in docs/.
 -->
 
 # AuthCraft API Constitution
@@ -56,6 +56,17 @@ All reads and writes for the table MUST go through that repository. This keeps
 table-specific data access explicit and its contract alongside its owning
 repository.
 
+### VIII. Keep Production Releases Protected
+Production publication MUST remain blocked until the repository has an effective
+protected approval mechanism and every required identity, release provenance,
+database review, and recovery gate has been verified. A checklist, workflow
+dispatch, boolean input, or successful read-only evaluation MUST NOT be treated
+as deployment approval. Before an authorized release, reviewers MUST inspect
+the generated database report and SQL, post-deployment actions, data impact, and
+recovery plan for the exact immutable release. Documentation describes these
+checks but MUST NOT enable or authorize publication. This prevents a review aid
+or technical capability from being mistaken for approval to change Production.
+
 ## Technical Constraints
 
 - The API targets .NET 10 and uses the Application, Domain, Infrastructure, and
@@ -74,6 +85,8 @@ repository.
   configuration before proposing a design.
 - Run focused tests when available and applicable build commands before
   considering a change complete.
+- Production release documentation and review steps MUST remain separate from
+  Staging validation and diagnostics.
 
 ## Governance
 
@@ -88,4 +101,4 @@ change conflicts with a principle, its proposal MUST describe the impact and
 include a compatibility, security, or deployment plan; amend the principle
 when the project decision changes.
 
-**Version**: 2.0.0 | **Ratified**: 2026-11-02 | **Last Amended**: 2026-11-05
+**Version**: 2.1.0 | **Ratified**: 2026-11-02 | **Last Amended**: 2026-11-07

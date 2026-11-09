@@ -41,6 +41,10 @@ public sealed class DatabaseDeploymentReviewTests
     [InlineData("reviewer-override")]
     [InlineData("wrong-options")]
     [InlineData("missing-options")]
+    [InlineData("wrong-staging-baseline")]
+    [InlineData("missing-api-compatibility")]
+    [InlineData("missing-data-impact")]
+    [InlineData("missing-recovery-plan")]
     public void Publish_BlocksInvalidOrChangedReviewWithoutModification(string scenario)
     {
         using var sandbox = new ReviewSandbox();
@@ -182,6 +186,8 @@ public sealed class DatabaseDeploymentReviewTests
                     if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-release') { $commit = '{{new string('b', 40)}}' }
                     $database = 'authcraft-db-staging'
                     if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-destination') { $database = 'authcraft-db' }
+                    $stagingBaseline = 'unknown'
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-staging-baseline') { $stagingBaseline = '{{new string('b', 40)}}' }
                     $dacpacHash = (Get-FileHash -LiteralPath '{{dacpacPath}}' -Algorithm SHA256).Hash.ToLowerInvariant()
                     $reportHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy-report.xml")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
                     $sqlHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy.sql")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -191,16 +197,29 @@ public sealed class DatabaseDeploymentReviewTests
                 deployment_review=$decision
                 run_id=12345
                 commit_sha=$commit
+                staging_baseline_sha=$stagingBaseline
                 target_environment=staging
                 database_server=authcraftdbbrasil.database.windows.net
                 database_name=$database
                 dacpac_sha256=$dacpacHash
+                api_compatibility=accepted
+                data_impact=accepted
+                recovery_plan=accepted
                 block_on_possible_data_loss=true
                 drop_objects_not_in_source=false
                 script_database_options=$scriptDatabaseOptions
                 deploy_report_sha256=$reportHash
                 deploy_script_sha256=$sqlHash
                 "@
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-api-compatibility') {
+                        $body = $body -replace '(?m)^api_compatibility=.*\r?\n', ''
+                    }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-data-impact') {
+                        $body = $body -replace '(?m)^data_impact=.*\r?\n', ''
+                    }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recovery-plan') {
+                        $body = $body -replace '(?m)^recovery_plan=.*\r?\n', ''
+                    }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-options') {
                         $body = $body -replace '(?m)^script_database_options=.*\r?\n', ''
                     }
@@ -221,6 +240,7 @@ public sealed class DatabaseDeploymentReviewTests
                     ExpectedRunId = '12345'
                     SqlPackagePath = '{{sqlPackagePath}}'
                     ReviewIssueNumber = '10'
+                    StagingBaselineSha = 'unknown'
                 }
                 if ($env:REVIEW_TEST_SCENARIO -eq 'reviewer-override') { $parameters.AllowedReviewer = 'other-user' }
                 & '{{publisherPath}}' @parameters

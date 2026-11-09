@@ -16,6 +16,7 @@ param(
     [string]$ExpectedRunId,
     [string]$SqlPackagePath,
     [string]$ReviewIssueNumber,
+    [string]$StagingBaselineSha,
     [string]$AllowedReviewer = 'leoperetti'
 )
 
@@ -24,6 +25,11 @@ $originalSqlAccessToken = [Environment]::GetEnvironmentVariable('AUTHCRAFT_SQL_A
 $originalGitHubToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
 if ($Mode -eq 'Publish' -and $TargetEnvironment -ne 'staging') {
     throw 'Production database publication is blocked until protected approval is available.'
+}
+if ($Mode -eq 'Publish' -and
+    $StagingBaselineSha -cne 'unknown' -and
+    $StagingBaselineSha -notmatch '^[A-Fa-f0-9]{40}$') {
+    throw 'Publish requires a verified Staging baseline or the explicitly accepted unknown initial baseline.'
 }
 if ($AllowedReviewer -cne 'leoperetti') {
     throw 'The SQL reviewer must match the repository-approved reviewer.'
@@ -218,7 +224,8 @@ function Get-AuthenticatedReview {
                 -DatabaseName $targetDatabase `
                 -DacpacSha256 $dacpacHash `
                 -ReportSha256 $reportHash `
-                -ScriptSha256 $scriptHash)) {
+                -ScriptSha256 $scriptHash `
+                -StagingBaselineSha $StagingBaselineSha)) {
         throw 'Latest authenticated review does not approve this exact release, destination, and SQL plan.'
     }
     return $latestReview

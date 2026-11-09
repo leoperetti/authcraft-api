@@ -15,8 +15,8 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('staging', 'production')]
     [string]$TargetEnvironment,
-    [Parameter(Mandatory = $true)]
     [string]$LastSuccessfulCommitSha,
+    [switch]$AllowInitialStagingBootstrap,
     [string]$RepositoryPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 )
 
@@ -45,9 +45,11 @@ try {
     if ($GitHubRef -cne 'refs/heads/main') {
         Stop-Preflight 'Release publication requires refs/heads/main.'
     }
+    $hasKnownBaseline = $LastSuccessfulCommitSha -match '^[A-Fa-f0-9]{40}$'
     if ($ExpectedCommitSha -notmatch '^[A-Fa-f0-9]{40}$' -or
-        $LastSuccessfulCommitSha -notmatch '^[A-Fa-f0-9]{40}$' -or
-        $ExpectedRunId -notmatch '^[1-9][0-9]*$') {
+        $ExpectedRunId -notmatch '^[1-9][0-9]*$' -or
+        (-not $hasKnownBaseline -and
+            ($LastSuccessfulCommitSha -cne 'unknown' -or -not $AllowInitialStagingBootstrap))) {
         Stop-Preflight 'Commit or run metadata is missing or malformed.'
     }
 
@@ -77,11 +79,13 @@ try {
         }
     }
 
-    if ([string]::Equals(
-            $ExpectedCommitSha,
-            $LastSuccessfulCommitSha,
-            [StringComparison]::OrdinalIgnoreCase)) {
-        Stop-Preflight 'Candidate release is not newer than the last successful release.'
+    if ($hasKnownBaseline) {
+        if ([string]::Equals(
+                $ExpectedCommitSha,
+                $LastSuccessfulCommitSha,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Preflight 'Candidate release is not newer than the last successful release.'
+        }
     }
 
     $repositoryRoot = (Resolve-Path -LiteralPath $RepositoryPath).Path
@@ -90,9 +94,11 @@ try {
         -not [string]::Equals($checkedOutCommit, $ExpectedCommitSha, [StringComparison]::OrdinalIgnoreCase)) {
         Stop-Preflight 'Checked-out source does not match the release commit.'
     }
-    & git -C $repositoryRoot merge-base --is-ancestor $LastSuccessfulCommitSha $ExpectedCommitSha *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Preflight 'Candidate release is older than or diverged from the last successful release.'
+    if ($hasKnownBaseline) {
+        & git -C $repositoryRoot merge-base --is-ancestor $LastSuccessfulCommitSha $ExpectedCommitSha *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Preflight 'Candidate release is older than or diverged from the last successful release.'
+        }
     }
 
     $run = Get-ActionsMetadata "actions/runs/$ExpectedRunId"
@@ -102,18 +108,21 @@ try {
         $run.head_sha -cne $ExpectedCommitSha.ToLowerInvariant() -or
         $run.head_branch -cne 'main' -or
         $run.event -notin @('push', 'workflow_dispatch') -or
-        $run.path -notin @('.github/workflows/main_authcraft-api.yml', '.github/workflows/main_authcraft-api-staging.yml')) {
+        $run.path -cne '.github/workflows/main_authcraft-api-staging.yml') {
         Stop-Preflight 'Actions candidate does not match an authorized main build from this repository.'
     }
     $jobs = Get-ActionsMetadata "actions/runs/$ExpectedRunId/jobs?per_page=100"
-    $buildJobName = 'build'
-    if ($run.path -ceq '.github/workflows/main_authcraft-api-staging.yml') {
-        $buildJobName = 'validate'
-    }
+    $buildJobName = 'validate'
     $buildJobs = @($jobs.jobs | Where-Object { $_.name -ceq $buildJobName })
     if ($jobs.total_count -ne @($jobs.jobs).Count -or
         $buildJobs.Count -ne 1 -or $buildJobs[0].status -cne 'completed' -or $buildJobs[0].conclusion -cne 'success') {
         Stop-Preflight 'Actions build completion could not be verified.'
+    }
+    $publisherVerificationJobs = @($jobs.jobs | Where-Object { $_.name -ceq 'verify-staging-publisher' })
+    if ($publisherVerificationJobs.Count -ne 1 -or
+        $publisherVerificationJobs[0].status -cne 'completed' -or
+        $publisherVerificationJobs[0].conclusion -cne 'success') {
+        Stop-Preflight 'Staging OIDC publisher verification did not complete successfully in the release run.'
     }
 
     $artifactMetadata = Get-ActionsMetadata "actions/runs/$ExpectedRunId/artifacts?per_page=100"
@@ -146,12 +155,16 @@ try {
         }
     }
 
-    $history = Get-ActionsMetadata 'actions/workflows/main_authcraft-api.yml/runs?branch=main&status=success&per_page=100'
+    $history = Get-ActionsMetadata 'actions/workflows/main_authcraft-api-staging.yml/runs?branch=main&status=success&per_page=100'
+    if ($history.total_count -ne @($history.workflow_runs).Count) {
+        Stop-Preflight 'Actions staging history is truncated; the initial baseline cannot be verified.'
+    }
     $lastStagingRun = $null
+    $lastStagingRunCreatedAt = [DateTimeOffset]::MinValue
     foreach ($previousRun in $history.workflow_runs) {
         if ($previousRun.repository.full_name -cne 'leoperetti/authcraft-api' -or
             $previousRun.head_repository.full_name -cne 'leoperetti/authcraft-api' -or
-            $previousRun.path -cne '.github/workflows/main_authcraft-api.yml' -or
+            $previousRun.path -cne '.github/workflows/main_authcraft-api-staging.yml' -or
             $previousRun.head_branch -cne 'main' -or
             $previousRun.event -notin @('push', 'workflow_dispatch') -or
             $previousRun.status -cne 'completed' -or $previousRun.conclusion -cne 'success' -or
@@ -166,28 +179,78 @@ try {
             $_.name -ceq 'deploy-staging' -and $_.status -ceq 'completed' -and $_.conclusion -ceq 'success'
         })
         if ($stagingJobs.Count -eq 1) {
-            $lastStagingRun = $previousRun
-            break
+            $previousRunCreatedAt = [DateTimeOffset]::MinValue
+            if (-not [DateTimeOffset]::TryParse(
+                    [string]$previousRun.created_at,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::AssumeUniversal,
+                    [ref]$previousRunCreatedAt)) {
+                Stop-Preflight 'Actions staging deployment timestamp is missing or malformed.'
+            }
+            if ($null -eq $lastStagingRun -or
+                $previousRunCreatedAt -gt $lastStagingRunCreatedAt -or
+                ($previousRunCreatedAt -eq $lastStagingRunCreatedAt -and
+                    [long]$previousRun.id -gt [long]$lastStagingRun.id)) {
+                $lastStagingRun = $previousRun
+                $lastStagingRunCreatedAt = $previousRunCreatedAt
+            }
+        }
+        if ($stagingJobs.Count -gt 1) {
+            Stop-Preflight 'Actions history contains ambiguous successful staging deployment jobs.'
         }
     }
-    if ($null -eq $lastStagingRun -or
-        $lastStagingRun.head_sha -cne $LastSuccessfulCommitSha.ToLowerInvariant()) {
-        Stop-Preflight 'Last successful staging release is missing or does not match authenticated Actions history.'
+    if ($hasKnownBaseline) {
+        if ($null -eq $lastStagingRun -or
+            $lastStagingRun.head_sha -cne $LastSuccessfulCommitSha.ToLowerInvariant()) {
+            Stop-Preflight 'Last successful staging release is missing or does not match authenticated Actions history.'
+        }
+    } elseif ($null -ne $lastStagingRun) {
+        Stop-Preflight 'Initial Staging bootstrap is allowed only when no successful deployment is recorded.'
     }
 
+    $stagingPreflightOutput = & (Join-Path $PSScriptRoot 'Test-StagingPreflightMetadata.ps1') 2>$null
+    $stagingPreflightExitCode = $LASTEXITCODE
+    if ($stagingPreflightExitCode -ne 0 -or
+        [string]::IsNullOrWhiteSpace(($stagingPreflightOutput -join "`n"))) {
+        Stop-Preflight 'Live Staging resource, configuration, OIDC scope, or Production-disablement checks failed.'
+    }
+    try {
+        $stagingPreflight = ($stagingPreflightOutput -join "`n" | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Stop-Preflight 'Live Staging preflight metadata is malformed.'
+    }
+    if ($stagingPreflight.verification_state -cne 'confirmed' -or
+        $stagingPreflight.target_environment -cne 'staging' -or
+        $stagingPreflight.application -cne 'authcraft-api-staging' -or
+        $stagingPreflight.database -cne 'authcraft-db-staging' -or
+        $stagingPreflight.vault_name -cne 'authcraft-vault-staging' -or
+        $stagingPreflight.publisher_roles_verified -ne $true -or
+        $stagingPreflight.production_workflow_disabled -ne $true) {
+        Stop-Preflight 'Live Staging preflight does not confirm the expected isolated destination and publisher.'
+    }
+
+    $baselineState = 'verified'
+    $previousRunId = [string]$lastStagingRun.id
+    if (-not $hasKnownBaseline) {
+        $baselineState = 'unknown'
+        $previousRunId = $null
+    }
     [pscustomobject]@{
-        state = 'blocked'
+        state = 'ready_for_review'
         artifact_validation = 'verified'
         deployment_authorized = $false
-        blocking_reason = 'Live inventory, publisher identity, effective SQL permissions and configuration gates are not yet integrated.'
+        blocking_reason = 'Authenticated SQL review and temporary publish permission verification are still required before Publish.'
         commit_sha = $ExpectedCommitSha.ToLowerInvariant()
         run_id = $ExpectedRunId
-        previous_run_id = [string]$lastStagingRun.id
+        baseline_state = $baselineState
+        baseline_commit_sha = if ($hasKnownBaseline) { $LastSuccessfulCommitSha.ToLowerInvariant() } else { 'unknown' }
+        bootstrap_review_required = -not $hasKnownBaseline
+        previous_run_id = $previousRunId
         target = 'staging'
         database_server = 'authcraftdbbrasil.database.windows.net'
         database_name = 'authcraft-db-staging'
+        staging_preflight = $stagingPreflight
     } | ConvertTo-Json -Compress
-    Stop-Preflight 'Deployment remains blocked until live inventory, identity, SQL permissions and configuration gates are integrated.'
 }
 catch {
     if ($_.Exception.Message -notmatch '^(Production publication|Release publication|Commit or run|Manifest|A release|Candidate release)') {

@@ -39,3 +39,20 @@ Staging y Production usan sus recursos y Key Vault propios. No copies secretos
 entre ambientes. Production permanece bloqueado hasta disponer de aprobaciones y
 publicación protegida. Consulta [`docs/environments.md`](../docs/environments.md)
 para el estado operativo y los límites actuales.
+
+### Revisión de publicaciones Production
+
+El proceso previsto separa la guía fija del informe de cada ejecución:
+
+- [`docs/production-release-checklist.md`](../docs/production-release-checklist.md)
+  será la guía para revisar una publicación; GitHub Actions no la sobrescribirá.
+- Cada intento de Production generará `production-deployment-report.md`, disponible
+  como artefacto `production-deployment-report` en el run de GitHub Actions durante
+  30 días. El informe estará en español y resumirá los resultados; ante un fallo,
+  indicará la etapa, una causa sanitizada, el siguiente paso y las etapas no ejecutadas.
+- El proceso no hará commits automáticos ni habilitará Production. Si GitHub o el
+  runner se interrumpe antes de generar el artefacto, el run será evidencia de una
+  interrupción no concluyente.
+
+La guía y el informe documentan y facilitan la revisión: no sustituyen las aprobaciones
+ni los controles de publicación protegida.

@@ -205,17 +205,24 @@ de la escritura y sin enviar notificaciones.
 Registrar run ID, manifiesto, hashes y reporte SQL; comprobar el destino
 `authcraft-api-staging` y base `authcraft-db-staging` antes de escribir.
 
-El preflight actual solo tiene implementada la parte de procedencia de artefactos:
-consulta Actions autenticado, vuelve a descargar y compara API/DACPAC/manifiesto,
-y contrasta la version anterior con un job `deploy-staging` exitoso del workflow
-consolidado. Sin historial verificable no acepta un SHA anterior arbitrario. Mientras
-no se integren inventario, identidad, configuracion y permisos SQL, devuelve
-`state=blocked` y codigo no cero incluso si `artifact_validation=verified`.
-No omitir ese bloqueo para probar una publicacion.
+El workflow local agrega `preflight-staging` despues de `validate` y
+`verify-staging-publisher`. Consulta Actions autenticado, vuelve a descargar y
+compara API/DACPAC/manifiesto, valida el baseline contra un despliegue Staging
+exitoso verificable (o acepta `unknown` solo con bootstrap explicito y sin
+despliegues exitosos), y comprueba por OIDC metadatos ARM y el bloqueo de Production.
+El resultado esperado es `state=ready_for_review` con
+`deployment_authorized=false`; la revision SQL autenticada, el permiso temporal y
+Publish siguen siendo gates separados. Esta integracion local aun no se ha ejecutado
+desde Actions con OIDC ni se ha subido al remoto. No omitir el gate para probar una
+publicacion.
 
 La revision SQL debe estar en una issue abierta de `leoperetti/authcraft-api`,
 como comentario de `leoperetti`, con exactamente una linea por campo del
 [contrato de revision](contracts/environment-deployment.md#evidencia-de-revisión-de-compatibilidad).
+Debe incluir `staging_baseline_sha` (SHA verificado o `unknown` solo para el
+bootstrap inicial), `api_compatibility=accepted`, `data_impact=accepted` y
+`recovery_plan=accepted`, ademas del run, commit, destino, opciones y hashes
+exactos. El bootstrap `unknown` no sustituye la revision ni autoriza Publish.
 El publicador vuelve a consultar el comentario y a generar el plan antes de Publish.
 Rechazo, campos repetidos, cambio de hashes, error de API o revocacion bloquean.
 Conservar report/script originales y los archivos `staging-recheck-*` con acceso
@@ -300,3 +307,14 @@ la transición JWT aprobada.
 Evaluar esquema sin modificación, aprobar release/reporte y publicar los mismos
 hashes validados en staging. Si falta un control, paquete o evidencia, bloquear.
 No reconstruir el release ni permitir que otra ejecución complete la aprobación.
+
+### Informe del intento de publicación
+
+Cuando exista un flujo Production autorizado, abrir el run correspondiente en
+GitHub Actions y descargar el artefacto `production-deployment-report` (Markdown),
+incluso si el job falló. Consultar primero la
+[guía fija de revisión](../../docs/production-release-checklist.md); después usar el
+informe para localizar la etapa, causa sanitizada y siguiente paso sugerido.
+Los reportes/scripts SQL se descargan separadamente si están disponibles. El artefacto
+se retiene 30 días y no se escribe de vuelta al archivo fijo del repositorio.
+El informe no cambia los gates ni sustituye la aprobación protegida.

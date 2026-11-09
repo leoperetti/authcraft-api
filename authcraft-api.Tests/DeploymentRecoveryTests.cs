@@ -12,6 +12,8 @@ public sealed class DeploymentRecoveryTests
     public void DatabaseDeployment_StopsAfterEvaluationFailureWithoutRollbackOrPublish(string failureStage)
     {
         using var sandbox = new RecoverySandbox();
+        var protectedFiles = sandbox.SnapshotProtectedFiles();
+
         var result = sandbox.RunDatabaseDeployment(failureStage);
 
         Assert.NotEqual(0, result.ExitCode);
@@ -20,17 +22,21 @@ public sealed class DeploymentRecoveryTests
             File.ReadAllLines(sandbox.SqlPackageLogPath));
         Assert.DoesNotContain("ROLLBACK", File.ReadAllText(sandbox.SqlPackageLogPath), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("RESTORE", File.ReadAllText(sandbox.SqlPackageLogPath), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(protectedFiles, sandbox.SnapshotProtectedFiles());
     }
 
     [Fact]
     public void DatabaseDeployment_BlocksProductionBeforeInvokingSqlPackage()
     {
         using var sandbox = new RecoverySandbox();
+        var protectedFiles = sandbox.SnapshotProtectedFiles();
+
         var result = sandbox.RunDatabaseDeployment(failureStage: "", targetEnvironment: "production", mode: "Publish");
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.False(File.Exists(sandbox.SqlPackageLogPath));
         Assert.Contains("blocked", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(protectedFiles, sandbox.SnapshotProtectedFiles());
     }
 
     [Fact]
@@ -62,6 +68,9 @@ public sealed class DeploymentRecoveryTests
         private readonly string _sqlPackagePath;
         private readonly string _manifestPath;
         private readonly string _dacpacPath;
+        private readonly string _apiPackagePath;
+        private readonly string _productionVersionPath;
+        private readonly string _recentWritesPath;
 
         public RecoverySandbox()
         {
@@ -71,8 +80,14 @@ public sealed class DeploymentRecoveryTests
             _sqlPackagePath = Path.Combine(DirectoryPath, "mock-sqlpackage.ps1");
             _manifestPath = Path.Combine(DirectoryPath, "manifest.json");
             _dacpacPath = Path.Combine(DirectoryPath, "database.dacpac");
+            _apiPackagePath = Path.Combine(DirectoryPath, "api.zip");
+            _productionVersionPath = Path.Combine(DirectoryPath, "production-version.txt");
+            _recentWritesPath = Path.Combine(DirectoryPath, "production-recent-writes.txt");
             SqlPackageLogPath = Path.Combine(DirectoryPath, "sqlpackage-actions.log");
             File.WriteAllBytes(_dacpacPath, [1, 2, 3, 4]);
+            File.WriteAllText(_apiPackagePath, "synthetic-api-package");
+            File.WriteAllText(_productionVersionPath, new string('b', 40));
+            File.WriteAllText(_recentWritesPath, "synthetic-recent-write-must-be-preserved");
             File.WriteAllText(_sqlPackagePath, """
                 $action = @($args | Where-Object { $_ -like '/Action:*' })[0]
                 [IO.File]::AppendAllText($env:AUTHCRAFT_SQLPACKAGE_TEST_LOG, "$action`n")
@@ -108,6 +123,13 @@ public sealed class DeploymentRecoveryTests
         public string DirectoryPath { get; }
         public string SqlPackageLogPath { get; }
 
+        public string[] SnapshotProtectedFiles()
+        {
+            return new[] { _apiPackagePath, _productionVersionPath, _recentWritesPath }
+                .Select(path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
+                .ToArray();
+        }
+
         public ProcessResult RunDatabaseDeployment(
             string failureStage,
             string targetEnvironment = "staging",
@@ -136,6 +158,7 @@ public sealed class DeploymentRecoveryTests
                     "-ManifestPath", _manifestPath,
                     "-ExpectedCommitSha", new string('a', 40),
                     "-ExpectedRunId", "12345",
+                    "-StagingBaselineSha", "unknown",
                     "-SqlPackagePath", _sqlPackagePath
                 };
                 foreach (var argument in arguments)

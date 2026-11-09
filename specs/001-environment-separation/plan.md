@@ -1,6 +1,6 @@
 # Implementation Plan: Separación y verificación de ambientes
 
-**Branch**: `main` | **Date**: 2026-11-05 | **Spec**: [spec.md](spec.md)
+**Branch**: `main` | **Date**: 2026-11-07 | **Spec**: [spec.md](spec.md)
 
 **Input**: `specs/001-environment-separation/spec.md` y nombres Azure confirmados por el usuario.
 
@@ -11,8 +11,8 @@ directorio activo; la rama Git comprobada es `main`. No se cambió de rama.
 
 Habilitar development en localhost y staging sobre recursos existentes; diseñar la
 promoción de la misma aplicación y DACPAC a production con aprobación protegida.
-Por decisión del usuario, el repositorio sigue privado y la publicación de production
-permanece bloqueada hasta disponer de esa protección. No se reemplaza la aprobación
+Por decisión del usuario, el repositorio es público y la publicación de production
+permanece bloqueada hasta disponer de protección verificable. No se reemplaza la aprobación
 por `workflow_dispatch`, un booleano del workflow ni la revisión de main.
 
 Separar identidades de ejecución y publicación, validar destinos antes de abrir
@@ -23,6 +23,8 @@ No introducir migraciones EF ni modificar contratos de negocio.
 
 Esta fase solamente consulta metadatos y genera documentación. No asigna permisos,
 configura secretos, despierta bases pausadas, publica código ni crea recursos.
+La actualización de diseño de 2026-11-07 agrega a Production una guía fija y un
+informe Markdown por intento, sin cambiar el bloqueo ni la autorización vigente.
 
 ## Technical Context
 
@@ -58,6 +60,9 @@ con timeout finito y reintentos acotados por cold start, sin declarar éxito por
   puede reactivarlas y generar consumo. Pedir autorización antes de validarlas.
 - No crear, eliminar, recrear, contratar ni cambiar capacidad/visibilidad sin autorización.
 - Fallos bloquean etapas siguientes; no hay reversión destructiva automática.
+- El informe Production se genera sin salida nativa sin sanitizar y no modifica
+  documentación versionada; un fallo del runner antes de la fase final se registra
+  como interrupción no concluyente, no como una ejecución con informe exitoso.
 - Mantener production bloqueado también en Azure: un job omitido no basta si persisten
   credenciales utilizables por workflows alternativos.
 
@@ -78,6 +83,7 @@ tiene una identidad asignada por sistema. No se modifican recursos de CEKIDE.
 | V. Configuración | PASS: proveedores ASP.NET Core, User Secrets local y vault por ambiente; normalización compatible de claves existentes y validación temprana. |
 | VI. Nombres | PASS: variables descriptivas en código y scripts futuros. |
 | VII. Repositorios | PASS: las operaciones de datos de prueba usan servicios/repositorios existentes; la salud SQL no consulta tablas de negocio. No se refactorizan repositorios ajenos. |
+| VIII. Production protegido | PASS: checklist fija y reporte por ejecución son documentación/evidencia solamente; no habilitan workflows ni sustituyen aprobación o gates. |
 
 No hay excepciones constitucionales. Diseño listo para tareas; **habilitación de
 production bloqueada**, no requisito satisfecho. La feature completa no puede
@@ -98,6 +104,9 @@ specs\001-environment-separation\
     environment-deployment.md
   checklists\
     requirements.md
+docs\
+  production-release-checklist.md # guía fija; no se actualiza automáticamente
+  # production-deployment-report.md generado por run como artefacto Actions
 ```
 
 `tasks.md` será generado por `/speckit-tasks`, no por este comando.
@@ -214,17 +223,21 @@ salud, aislamiento SQL ni compatibilidad del esquema.
    No asumir que ese nombre es válido sin comprobar el artefacto generado.
 4. Staging: comprobar referencia main, identidades, destinos, hash, configuración y
    permisos. Serializar el workflow completo con `cancel-in-progress: false`;
-   comprobar versión superada antes de cualquier modificación de un destino.
+   comprobar versión superada antes de cualquier modificación de un destino. Solo
+   para el primer despliegue, permitir baseline desconocido si Actions no contiene
+   un despliegue Staging satisfactorio verificable y se activa el bootstrap explícito.
 5. Generar DeployReport y Script contra staging. Revisar compatibilidad con la API
    anterior y candidata, postdeploy y cambios dependientes de datos. Rechazar
    cambios incompatibles/destructivos; no confiar solo en BlockOnPossibleDataLoss.
    Cambios de esquema o postdeploy requieren revisión por responsable autorizado,
    acreditada con autoría/resultado consultados por API GitHub y vinculada al release,
-   destino, opciones y hashes de DACPAC/report/script según el contrato.
+   destino, baseline, compatibilidad API, impacto en datos, recuperación, opciones y
+   hashes de DACPAC/report/script según el contrato.
    Si falta evidencia válida, bloquear y permitir reanudar el mismo release sin
    reconstrucción después de revisión. Esta revisión SQL no reemplaza la protección
-   de aprobación production. Antes de la primera publicación, documentar el
-   procedimiento de recuperación (T044), aunque sea una tarea de US4.
+   de aprobación production. Si el baseline inicial es desconocido, la revisión
+   autenticada también debe reconocerlo. Antes de la primera publicación, documentar
+   el procedimiento de recuperación (T044), aunque sea una tarea de US4.
 6. Para cambios compatibles, publicar esquema antes de aplicación; esto permite que
    el bootstrap de la candidata encuentre su esquema. Mantener
    `BlockOnPossibleDataLoss=True` y `DropObjectsNotInSource=False`. Verificar que
@@ -244,6 +257,17 @@ salud, aislamiento SQL ni compatibilidad del esquema.
     y riesgos. El job con credenciales de modificación espera aprobación protegida,
     revalida el destino, publica el mismo DACPAC y API y comprueba salud. Si se detecta
     deriva respecto al reporte revisado, bloquear y solicitar nueva revisión/aprobación.
+11. Para cada intento de publicación production, generar `production-deployment-report.md`
+    y adjuntarlo en el artefacto estable `production-deployment-report` del mismo run,
+    en éxito o fallo; enlazarlo desde el resumen del run. Incluir versión, destino,
+    etapa/resultado, verificaciones, referencia de aprobación y disponibilidad/hash
+    de evidencia SQL. En fallo, exponer únicamente causa sanitizada y siguiente paso.
+    Generar/adjuntar el informe aun si una etapa previa falla y marcar etapas no
+    alcanzadas como no ejecutadas; excluir credenciales, datos personales y salida
+    nativa sin sanitizar. Retenerlo 30 días. Mantener
+    `docs/production-release-checklist.md` como guía revisable fija, sin commits
+    automáticos ni sobrescritura por cada intento. Un reporte solo documenta resultados:
+    no autoriza publicación ni habilita Production.
 
 ### Validación y recuperación
 
@@ -251,6 +275,9 @@ Pruebas de configuración, JWT cruzado, secretos faltantes, salud, manifiesto,
 referencia no autorizada y release superado. Prueba local con DACPAC real y las
 pruebas SQL del fixture. Staging con datos sintéticos, sin signup/invitaciones/reset
 que envíen correo. Production: verificaciones no destructivas y solo autorizadas.
+Probar el informe con casos de éxito y fallos en distintas etapas; verificar español,
+causa/acción sanitizadas, etapas posteriores como no ejecutadas, ausencia de secretos
+y asociación/retención del artefacto.
 
 Fallo de esquema bloquea API y promoción; no asumir transacción global de DacFx.
 Fallo de API permite volver al paquete anterior solo si es compatible con el esquema

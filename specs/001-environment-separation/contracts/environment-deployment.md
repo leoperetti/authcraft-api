@@ -131,6 +131,11 @@ Cambios destructivos/contractivos no pasan el flujo automático.
 - La acreditación es un registro de revisión autenticado en GitHub, con identificador
   consultable por API, autor permitido y resultado explícito de aprobación. Debe
   identificar run ID, commit, destino, hash DACPAC, opciones y hashes report/script.
+  También debe declarar `staging_baseline_sha` como el SHA del último despliegue
+  Staging verificado o exactamente `unknown`, y aceptar explícitamente
+  `api_compatibility=accepted`, `data_impact=accepted` y `recovery_plan=accepted`.
+  Cada campo debe aparecer una sola vez; una ausencia, duplicación o valor distinto
+  invalida la revisión.
   El publicador consulta el registro original por API; no confía en la autoría
   declarada en un archivo, comentario copiado o parámetro booleano.
 - Revalidar registro, permiso del autor y correspondencia de hashes antes de Publish.
@@ -142,6 +147,11 @@ Cambios destructivos/contractivos no pasan el flujo automático.
 - El workflow staging puede quedar bloqueado por revisión y reanudarse con el mismo
   release verificado, sin reconstruirlo. La revisión SQL no es sustituto del
   environment protegido requerido para aprobar production.
+- La primera publicación Staging puede usar `staging_baseline_sha=unknown` solo
+  cuando Actions no registra ningún despliegue Staging satisfactorio verificable.
+  El preflight debe comprobar esa ausencia y una opción explícita de bootstrap;
+  la revisión autenticada debe reconocer el baseline desconocido. Esto no aprueba
+  el plan ni autoriza Publish por sí solo.
 - La recuperación debe estar documentada antes de habilitar la primera publicación.
 
 ### Informe descargable de intentos Production

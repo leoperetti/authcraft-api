@@ -16,8 +16,19 @@ on:
         type: boolean
         required: false
         default: false
+      last_successful_staging_commit_sha:
+        description: SHA of the last verified Staging deployment; required unless bootstrap is explicitly selected
+        type: string
+        required: false
+        default: ''
+      allow_initial_staging_bootstrap:
+        description: Record an unknown baseline only when Actions has no successful Staging deployment
+        type: boolean
+        required: false
+        default: false
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -203,3 +214,77 @@ jobs:
           path: ${{ runner.temp }}/staging-sql-diagnostic.encrypted.json
           if-no-files-found: error
           retention-days: 1
+
+  preflight-staging:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.evaluate_staging_schema == true
+    needs:
+      - validate
+      - verify-staging-publisher
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download this run's release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: api
+          path: ${{ runner.temp }}/staging-preflight
+      - uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          path: ${{ runner.temp }}/staging-preflight/dacpac
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: ${{ runner.temp }}/staging-preflight/manifest
+
+      - name: Login as staging publisher via OIDC for scoped metadata reads
+        uses: azure/login@v2
+        with:
+          client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Verify release provenance and live Staging gates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST_SUCCESSFUL_STAGING_COMMIT_SHA: ${{ inputs.last_successful_staging_commit_sha }}
+          ALLOW_INITIAL_STAGING_BOOTSTRAP: ${{ inputs.allow_initial_staging_bootstrap }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDirectory = Join-Path $env:RUNNER_TEMP 'staging-preflight'
+          $parameters = @{
+            ManifestPath = Join-Path $artifactDirectory 'manifest\release-manifest.json'
+            ApiArtifactPath = Join-Path $artifactDirectory 'api\api.zip'
+            DatabaseArtifactPath = Join-Path $artifactDirectory 'dacpac\authcraft-db.dacpac'
+            ExpectedCommitSha = $env:GITHUB_SHA
+            ExpectedRunId = $env:GITHUB_RUN_ID
+            GitHubRef = $env:GITHUB_REF
+            TargetEnvironment = 'staging'
+          }
+          if ($env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
+            if (-not [string]::IsNullOrWhiteSpace($env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA) -and
+                $env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA -cne 'unknown') {
+              throw 'Initial bootstrap cannot also specify a known previous commit.'
+            }
+            $parameters.LastSuccessfulCommitSha = 'unknown'
+            $parameters.AllowInitialStagingBootstrap = $true
+          } else {
+            $parameters.LastSuccessfulCommitSha = $env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA
+          }
+          $preflightOutput = & .\scripts\Test-ReleasePreflight.ps1 @parameters
+          if ($LASTEXITCODE -ne 0) { throw 'Staging preflight failed; no deployment was attempted.' }
+          $preflight = ($preflightOutput -join "`n") | ConvertFrom-Json
+          if ($preflight.state -cne 'ready_for_review' -or
+              $preflight.target -cne 'staging' -or
+              $preflight.deployment_authorized -ne $false) {
+            throw 'Staging preflight did not return the expected review-only state.'
+          }
+          $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY

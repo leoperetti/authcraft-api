@@ -161,3 +161,39 @@ protección production, consumers de identidades, grants SQL, destino efectivo d
 secretos, configuración staging, salida real MSBuild y pruebas de funcionamiento.
 Estos puntos tienen acciones y condiciones de bloqueo; no se presume su éxito.
 Las conexiones a bases pausadas y cualquier cambio remoto requieren autorización.
+
+## 8. Guía fija y reporte por intento Production
+
+**Decision**: `docs/production-release-checklist.md` es una guía fija de revisión
+humana. Cada intento futuro de publicación Production genera
+`production-deployment-report.md` y lo publica en el artefacto estable
+`production-deployment-report` del mismo run; un enlace aparece en el resumen del run.
+Esto aplica tanto a éxito como a fallo, con retención de 30 días. El workflow no
+sobrescribe la guía ni crea commits automáticos.
+
+**Rationale**: La guía explica los controles antes de autorizar; el informe registra
+el resultado de una ejecución concreta. Separarlos conserva la historia por run,
+evita conflictos o pérdida de evidencia y permite al usuario descargar y leer
+la causa y el siguiente paso cuando una etapa falla. La generación del informe no
+es aprobación ni cambia el estado bloqueado de Production.
+
+**Report contents**: Identificadores de run/commit/releases, destino, etapa y
+resultado de cada gate, estado de aprobación, referencia y disponibilidad/hash de
+DeployReport/Script, causa de fallo sanitizada y siguiente paso recomendado.
+Español claro; sin secretos, valores de configuración, datos personales ni salida
+nativa no revisada. En caso de fallo temprano, emitir las etapas no alcanzadas como
+no ejecutadas y adjuntar el informe en un paso `always()` independiente del paso de
+publicación, siempre que GitHub Actions alcance la fase final del job.
+
+**Alternatives considered**: Un solo archivo versionado actualizado por cada run
+se descarta por sobrescritura y commits automatizados. Solo una guía manual se
+descarta porque no produce evidencia consultable por intento ni informa fallos.
+Un resumen de job sin artefacto se descarta porque no proporciona un informe
+descargable retenido por 30 días. Si el runner/plataforma se interrumpe antes del
+paso final de generación/subida, el run queda como evidencia de interrupción, pero
+no puede garantizarse un nuevo artefacto desde un job que dejó de ejecutarse.
+
+**Open implementation details**: Acordar estructura y nombres estables de campos
+al generar tareas; probar uploads con fallos simulados por etapa. Un fallo total
+del runner/GitHub antes de la fase de finalización no puede garantizar un artefacto;
+el run mismo debe permanecer como evidencia de esa interrupción.
