@@ -1273,6 +1273,51 @@ de sus nuevos hashes). El run 42692449745 no contiene esta proteccion y no debe
 reutilizarse. No hubo commit/push/dispatch, conexiones Azure, permisos nuevos ni
 Publish remoto; Production permanece bloqueado.
 
+### T039: verificacion remota review-only del registro inicial
+
+Autorizacion ejecutada en
+[run 42721985281](https://github.com/leoperetti/authcraft-api/actions/runs/42721985281),
+commit `6f139baa4834681f9d6b93293948425331b0868e`.
+validate, verify-staging-publisher y preflight-staging finalizaron success.
+El registro candidate-release real fue descargado y comparado con manifiesto y
+ambos paquetes: commit/run exactos, created_at UTC, state=built,
+staging_validation_state=not_validated, referencia null y
+promotion_authorized=false. Los cinco artefactos conservan procedencia del mismo
+run y no estan expirados; retencion hasta 2026-12-09.
+
+Hashes SHA-256 verificados tras descargar, sin editar ni ejecutar SQL:
+
+| Evidencia | SHA-256 |
+|-----------|---------|
+| API | `542f09fdadbde3bed667ac8095b0316cd08c5c079411e37aa2cdf8cbb34ff898` |
+| DACPAC | `4efe47760b536db09ea14db11056c07081f654cfd4332862750464e56e8ba869` |
+| DeployReport | `a01e0e92a079f14ddab1a4a9c39d16b2db235374852cb6cb42314f8f5da31b64` |
+| SQL | `778fb7f1c40b85bc824356c486c0ae1577b83a5aed355386ce8ef8ae4bc7b68d` |
+| Toolchain JSON | `1ae1f6d3fd30b7b54172400d4191f2114b7416e2ab8b1a8aa10e6498c4db32e2` |
+
+El reporte/SQL coincide byte a byte por SHA-256 con la evaluacion anterior:
+Alter invitations y cinco Create constraints, sin Drop ni recreacion de status.
+SqlPackage 170.4.53.0 conserva hash
+`907454a8848e9617666ac03db8c18e82a15e0435aaa223d8d132f830a7841d26`;
+IncludeTransactionalScripts=true y ScriptDatabaseOptions=false.
+La identidad OIDC paso su comprobacion SQL real de review-only y devolvio
+deployment_authorized=false. No se concedieron permisos ni se ejecuto Publish,
+deploy API, postdeploy ni smoke. Production sigue disabled_manually.
+
+Actions aprobo 188 pruebas y omitio dos LocalEnvironmentSqlTests por falta de
+conexion local configurada en ese job; esas omisiones no acreditan ensayos de
+motor. Las 72 regresiones locales previas no tuvieron omisiones. Se mantienen
+las advertencias preexistentes de nullabilidad/CS0108 y de runtime de actions.
+
+La revision del run 42705333969 NO aprueba este candidato, aunque el SQL coincida:
+commit/run/DACPAC son distintos. Antes de Publish se requiere nueva revision
+autenticada con estos valores y revalidacion live del plan/baseline. No se creo
+ni edito una aprobacion en nombre del responsable. Baseline inicial sigue unknown;
+el bootstrap review-only no constituye despliegue. T039 sigue parcial: la
+reanudacion real y sus estados posteriores aun no se ejecutaron y Production
+permanece bloqueado. La verificacion del registro inicial en Actions si esta
+completada; no repetirla como pendiente.
+
 ### T039: registro inicial del candidato integrado localmente
 
 Autorizacion posterior 2026-11-09: el usuario autoriza commit/push a main y

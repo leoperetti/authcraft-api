@@ -5,6 +5,16 @@ Development fue validado en LocalDB; no se conectó Azure SQL durante esa valida
 
 ## Prerrequisitos y límites
 
+Actualizacion posterior: el nuevo
+[run 42721985281](https://github.com/leoperetti/authcraft-api/actions/runs/42721985281)
+completo packaging, registro inicial built, OIDC SQL review-only y preflight,
+sin Publish/API/permisos. Registro/manifiesto/paquetes descargados y hashes
+verificados. Esta completada la comprobacion remota del registro inicial; falta
+la reanudacion real. El candidato nuevo requiere revision autenticada propia,
+no hereda la del run 42705333969. Ver
+[evidencia y hashes](../../docs/environments.md#t039-verificacion-remota-review-only-del-registro-inicial).
+Las secciones siguientes conservan la cronologia de las evaluaciones anteriores.
+
 Actualizacion 2026-11-09: `IncludeTransactionalScripts=True` esta implementado
 en evaluacion, reevaluacion y Publish del inicializador/publicador. El postdeploy
 tiene transaccion propia verificada en LocalDB, no rollback global del esquema.

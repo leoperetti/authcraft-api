@@ -453,6 +453,16 @@ No agregar tablas para el modelo operativo de publicaciones.
   sin errores y sin hooks registrados.
   T039 sigue parcial hasta comprobar la ruta remota y el ciclo protegido previsto;
   no se habilito ni implemento publicacion Production.
+  Verificacion remota autorizada: run 42721985281 / commit
+  6f139baa4834681f9d6b93293948425331b0868e paso validate,
+  verify-staging-publisher y preflight-staging. Registro inicial built descargado
+  y comparado con manifiesto/paquetes; los cinco artefactos tienen procedencia
+  exacta y retencion de 30 dias. 188 pruebas Actions aprobadas, dos SQL locales
+  omitidas (no evidencia de motor). OIDC SQL real review-only aprobado.
+  Reporte/SQL conserva hashes anteriores, pero este candidato requiere revision
+  autenticada propia por commit/run/DACPAC distintos. Sin Publish/API/permisos.
+  T039 permanece parcial solo para reanudacion real/estados posteriores y ciclo
+  protegido; el registro inicial remoto ya esta verificado.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
