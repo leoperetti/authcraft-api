@@ -280,6 +280,15 @@ No agregar tablas para el modelo operativo de publicaciones.
   sin Publish, sin permisos nuevos y sin despliegue API. Antes del commit pasaron
   las 147 pruebas seleccionadas por el workflow, con LocalDB habilitado y sin
   omisiones. La revision autenticada del nuevo release sigue pendiente.
+
+  Resultado remoto: commit 38da8568c2c3420df4a896aac84763ae15ade37d,
+  run 42692449745 con validate, verify-staging-publisher y preflight-staging en
+  success. Manifiesto/paquetes verificados por hash; report sin Drop y SQL con
+  siete validaciones explicitas. El runner conserva cinco WAITFOR DacFx y no
+  agrega otra validacion final propia. El SQL original pasa el gate de constraints
+  aisladamente, sin Publish ni aprobacion fabricada. Evidencia en docs/environments.md.
+  T033/T035/T037 siguen pendientes de revision y permisos de publicacion; el
+  workflow de reanudacion esta en main, pero no se ejecuto.
 - [X] T034 [US3] Implementar `scripts\Test-StagingRelease.ps1` para host resuelto desde ARM, HTTPS, status/version exactos en salud, login/roles de tenant sintético, timeout finito/reintentos acotados y resultado fallido explícito; credenciales/token en memoria protegida, sin signup/invitaciones/reset ni notificaciones reales.
 - [ ] T035 [US3] Completar el workflow activo de Staging en `.github\workflows\main_authcraft-api-staging.yml`: PR solo build/pruebas sin Azure; workflow_dispatch en main construye API y SQL una vez, ejecuta las pruebas focalizadas, publica manifiesto/paquetes con retención acordada, evalúa esquema, verifica procedencia/baseline/metadatos live y exige revisión autenticada antes de cualquier Publish/API/smoke. Mantener el workflow Production separado y `disabled_manually`, sin publicador efectivo; limitar id-token:write a jobs Azure, serializar publicación completa con cancel-in-progress:false y permitir reanudar el mismo release tras revisión sin reconstrucción. La revisión SQL Staging no sustituye aprobación protegida Production. El job local `preflight-staging` solo prepara revisión y nunca despliega.
 

@@ -1123,6 +1123,44 @@ evaluacion SQL y bootstrap inicial de baseline desconocido; no al workflow
 `deploy_authcraft-api-staging.yml`. Esta autorizacion no concede permisos SQL,
 no aprueba hashes nuevos ni permite publicar API/SQL.
 
+#### Nuevo candidato Actions 42692449745
+
+Commit/push autorizado: `38da8568c2c3420df4a896aac84763ae15ade37d`.
+El [run 42692449745](https://github.com/leoperetti/authcraft-api/actions/runs/42692449745)
+termino con `validate`, `verify-staging-publisher` y `preflight-staging` en success.
+Solo se construyo/empaqueto, verifico OIDC/permisos de revision, genero
+DeployReport/Script y ejecuto preflight review-only; no hubo Publish ni deploy API.
+
+Se descargaron los cuatro artefactos, verificando commit/run del manifiesto y
+SHA-256 de los dos paquetes:
+
+| Evidencia | SHA-256 |
+|-----------|---------|
+| API ZIP | `cffd92cb0c8d4a1db40505976dfc25e21dbc3dacd7f9bfb4569015bc4d01f73c` |
+| DACPAC | `939c66ebe421f8b6b08690871e2387728f348e5e5da84c189966bd34d488a92e` |
+| DeployReport | `a01e0e92a079f14ddab1a4a9c39d16b2db235374852cb6cb42314f8f5da31b64` |
+| SQL | `d79e26bea0e507b472f8be4e7b09826dd8aa10b999bd6d72087b8680e0106fd8` |
+
+El report no tiene alertas ni operaciones Drop: altera invitations y crea una FK
+y cuatro checks. El SQL exacto de Actions incluye cinco WAITFOR de DacFx y cinco
+creaciones WITH NOCHECK, seguidas de las siete validaciones explicitas y el guard
+versionado. A diferencia del ensayo local con otra instalacion SqlPackage, el
+runner conserva WAITFOR y no agrega otra fase de validacion despues del postdeploy.
+La procedencia DacFx de esos WAITFOR fue reproducida previamente; su finalidad
+interna sigue sin confirmarse y debe constar en la revision, no ocultarse ni
+confundirse con una modificacion manual.
+
+El SQL original del runner paso el gate de constraints exacto del publicador
+ejecutado aisladamente, sin autenticar una aprobacion ni invocar Publish.
+Este gate no acredita por si solo todos los requisitos de revision constitucional.
+Los artefactos originales se conservan en Actions y en la carpeta privada de
+sesion `files/staging-release-42692449745`, sin editar el SQL.
+El workflow de reanudacion ya esta versionado en main, pero no se ejecuto.
+Production sigue `disabled_manually`; no se concedieron permisos SQL.
+Pendientes: revision autenticada del nuevo candidato y sus hashes, resolucion
+explicita de los puntos de revision, permisos/revocacion comprobados y restantes
+gates operacionales antes de cualquier publicacion.
+
 T028/T029/T032 estan completos. T033/T035/T037/T038/T040/T041 siguen pendientes.
 No habilitar Production, no conceder aun `db_owner` y no publicar Staging hasta que
 el plan exacto sea reevaluado/revisado, el workflow de publicacion este listo y
