@@ -64,14 +64,19 @@ public sealed class DatabaseDeploymentReviewTests
     public void Publish_FailureDoesNotAttemptRollbackOrExposeNativeDiagnostics()
     {
         using var sandbox = new ReviewSandbox();
+        var protectedFiles = sandbox.SnapshotProtectedFiles();
 
         var result = sandbox.Run("publish-fails");
 
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Equal("/Action:Publish", sandbox.Actions.Last());
+        Assert.Equal(
+            ["/Action:DeployReport", "/Action:Script", "/Action:DeployReport", "/Action:Script", "/Action:Publish"],
+            sandbox.Actions);
         Assert.Contains("no rollback", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("native diagnostic", result.Output + result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(sandbox.SyntheticToken, result.Output + result.Error, StringComparison.Ordinal);
+        Assert.Equal(protectedFiles, sandbox.SnapshotProtectedFiles());
+        Assert.Equal("schema-partially-applied", File.ReadAllText(sandbox.SchemaStatePath));
     }
 
     private sealed class ReviewSandbox : IDisposable
@@ -79,6 +84,9 @@ public sealed class DatabaseDeploymentReviewTests
         private readonly string _directory;
         private readonly string _harnessPath;
         private readonly string _actionLog;
+        private readonly string _apiPackagePath;
+        private readonly string _activeApiVersionPath;
+        private readonly string _recentWritesPath;
 
         public ReviewSandbox()
         {
@@ -86,6 +94,14 @@ public sealed class DatabaseDeploymentReviewTests
             Directory.CreateDirectory(_directory);
             _actionLog = Path.Combine(_directory, "actions.log");
             _harnessPath = Path.Combine(_directory, "review-harness.ps1");
+            _apiPackagePath = Path.Combine(_directory, "candidate-api.zip");
+            _activeApiVersionPath = Path.Combine(_directory, "active-api-version.txt");
+            _recentWritesPath = Path.Combine(_directory, "recent-writes.txt");
+            SchemaStatePath = Path.Combine(_directory, "schema-state.txt");
+            File.WriteAllText(_apiPackagePath, "synthetic-candidate-api-package");
+            File.WriteAllText(_activeApiVersionPath, "synthetic-active-api-version");
+            File.WriteAllText(_recentWritesPath, "synthetic-recent-user-write");
+            File.WriteAllText(SchemaStatePath, "schema-before-publish");
             var dacpacPath = Path.Combine(_directory, "database.dacpac");
             var manifestPath = Path.Combine(_directory, "manifest.json");
             var sqlPackagePath = Path.Combine(_directory, "sqlpackage.ps1");
@@ -105,6 +121,7 @@ public sealed class DatabaseDeploymentReviewTests
                 $action = @($args | Where-Object { $_ -like '/Action:*' })[0]
                 Add-Content -LiteralPath $env:REVIEW_TEST_ACTION_LOG -Value $action
                 foreach ($required in @('/p:BlockOnPossibleDataLoss=True', '/p:DropObjectsNotInSource=False',
+                    '/p:ScriptDatabaseOptions=False',
                     '/TargetTrustServerCertificate:False',
                     '/TargetDatabaseName:authcraft-db-staging',
                     '/TargetServerName:tcp:authcraftdbbrasil.database.windows.net,1433')) {
@@ -124,6 +141,7 @@ public sealed class DatabaseDeploymentReviewTests
                     [IO.File]::WriteAllText($path, $sql)
                 }
                 if ($action -eq '/Action:Publish' -and $env:REVIEW_TEST_SCENARIO -eq 'publish-fails') {
+                    [IO.File]::WriteAllText($env:REVIEW_TEST_SCHEMA_STATE_PATH, 'schema-partially-applied')
                     Write-Error "native diagnostic $env:AUTHCRAFT_SQL_ACCESS_TOKEN"
                     exit 1
                 }
@@ -203,6 +221,14 @@ public sealed class DatabaseDeploymentReviewTests
 
         public string SyntheticToken { get; } = $"synthetic-{Guid.NewGuid():N}";
         public string[] Actions => File.Exists(_actionLog) ? File.ReadAllLines(_actionLog) : [];
+        public string SchemaStatePath { get; }
+
+        public string[] SnapshotProtectedFiles()
+        {
+            return new[] { _apiPackagePath, _activeApiVersionPath, _recentWritesPath }
+                .Select(path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
+                .ToArray();
+        }
 
         public ProcessResult Run(string scenario)
         {
@@ -221,6 +247,7 @@ public sealed class DatabaseDeploymentReviewTests
             processInfo.Environment["GITHUB_REPOSITORY"] = "leoperetti/authcraft-api";
             processInfo.Environment["REVIEW_TEST_SCENARIO"] = scenario;
             processInfo.Environment["REVIEW_TEST_ACTION_LOG"] = _actionLog;
+            processInfo.Environment["REVIEW_TEST_SCHEMA_STATE_PATH"] = SchemaStatePath;
             processInfo.Environment["REVIEW_TEST_DRIFT_PATH"] = Path.Combine(_directory, "drift");
             using var process = Process.Start(processInfo)!;
             var output = process.StandardOutput.ReadToEndAsync();

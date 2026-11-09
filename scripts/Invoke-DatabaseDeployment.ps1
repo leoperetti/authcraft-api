@@ -76,6 +76,7 @@ $commonArguments = @(
     '/TargetTrustServerCertificate:False',
     '/p:BlockOnPossibleDataLoss=True',
     '/p:DropObjectsNotInSource=False',
+    '/p:ScriptDatabaseOptions=False',
     "/AccessToken:$sqlAccessToken"
 )
 

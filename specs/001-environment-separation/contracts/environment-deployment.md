@@ -113,7 +113,9 @@ acordado antes de habilitar publicación; si expiraron, bloquear promoción/recu
 
 MSBuild construye el `.sqlproj`; SqlPackage evalúa y publica el DACPAC.
 DeployReport/Script y Publish usan mismas opciones:
-`BlockOnPossibleDataLoss=True`, `DropObjectsNotInSource=False`.
+`BlockOnPossibleDataLoss=True`, `DropObjectsNotInSource=False` y
+`ScriptDatabaseOptions=False` para no alterar opciones de la base destino ni
+requerir permisos `ALTER DATABASE` por diferencias ajenas al esquema del DACPAC.
 Compatible significa que API anterior y candidata pueden operar con el esquema
 resultante, incluidos postdeploy y cambios dependientes de datos.
 Cambios destructivos/contractivos no pasan el flujo automático.
@@ -138,6 +140,22 @@ Cambios destructivos/contractivos no pasan el flujo automático.
   release verificado, sin reconstruirlo. La revisión SQL no es sustituto del
   environment protegido requerido para aprobar production.
 - La recuperación debe estar documentada antes de habilitar la primera publicación.
+
+### Informe descargable de intentos Production
+
+- `docs/production-release-checklist.md` es la guía fija que el responsable consulta
+  para revisar una publicación. Actions MUST NOT sobrescribirla ni crear commits por run.
+- Cada intento Production MUST producir `production-deployment-report.md` y publicarlo
+  en el artefacto estable `production-deployment-report` del mismo run, descargable y
+  retenido 30 días; el resumen del run enlaza al artefacto. Aplica a resultados
+  exitosos y fallidos. Si una verificación falla, el informe indica la etapa, causa
+  sanitizada, siguiente paso recomendado y las etapas posteriores como no ejecutadas.
+- El informe incluye run/commit/release, destino, resultado por etapa/gate, referencia
+  de aprobación y disponibilidad/hash de report/script SQL. No incluye secretos,
+  datos personales, cadenas de conexión ni salida nativa sin sanitizar.
+- La generación del informe es evidencia, nunca aprobación ni autorización para
+  desplegar. Un fallo global de runner/plataforma anterior al paso final puede impedir
+  adjuntarlo; el historial del run queda como evidencia de interrupción no concluyente.
 
 Preflight fallido: ninguna escritura. Esquema fallido: no publicar candidata.
 Aplicación o salud fallida: bloquear promoción; no revertir base automáticamente.
