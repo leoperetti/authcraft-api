@@ -423,8 +423,36 @@ jobs:
             $attempt.postdeploy_result = 'unknown'
             $attempt.failure_state_verification = 'unknown'
           }
-          if ($env:SMOKE_RESULT -eq 'success') {
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'staging-release\manifest\release-manifest.json'
+          $manifestVerified = $false
+          if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $manifestVerified = $manifest.commit_sha -ceq $env:RELEASE_COMMIT_SHA -and
+              [string]$manifest.run_id -ceq $env:RELEASE_RUN_ID -and
+              $manifest.api.artifact -ceq 'api' -and $manifest.database.artifact -ceq 'dacpac' -and
+              $manifest.api.sha256 -cmatch '^[a-f0-9]{64}$' -and
+              $manifest.database.sha256 -cmatch '^[a-f0-9]{64}$'
+          }
+          $candidateBindingValid = $attempt.commit_sha -ceq $env:RELEASE_COMMIT_SHA -and
+            [string]$attempt.release_run_id -ceq $env:RELEASE_RUN_ID
+          $stagingValidated = $manifestVerified -and $candidateBindingValid -and
+            $env:TRANSACTION_RESULT -eq 'success' -and
+            $env:PREFLIGHT_RESULT -eq 'success' -and $env:DATABASE_RESULT -eq 'success' -and
+            $env:APPLICATION_RESULT -eq 'success' -and $env:SMOKE_RESULT -eq 'success' -and
+            $attempt.result -eq 'succeeded' -and $attempt.target_environment -ceq 'staging' -and
+            $attempt.include_transactional_scripts -eq $true -and $attempt.postdeploy_transaction -eq $true -and
+            $attempt.schema_result -eq 'succeeded' -and
+            $attempt.transaction_scope -eq 'separate_schema_and_postdeploy'
+          if ($stagingValidated) {
             $attempt.result = 'succeeded'
+            $attempt.failure_stage = $null
+            $attempt.sanitized_failure_summary = $null
+            $attempt.recommended_next_step = $null
+          } elseif ($env:SMOKE_RESULT -eq 'success') {
+            $attempt.result = 'failed'
+            $attempt.failure_stage = 'evidence'
+            $attempt.sanitized_failure_summary = 'Los resultados de etapas no acreditan el mismo despliegue completo.'
+            $attempt.recommended_next_step = 'Inspeccionar el intento y sus gates; no promover ni reintentar automaticamente.'
           } elseif ($env:APPLICATION_RESULT -in @('failure', 'cancelled') -or $env:SMOKE_RESULT -in @('failure', 'cancelled')) {
             $attempt.result = 'failed'
             $attempt.failure_stage = if ($env:APPLICATION_RESULT -in @('failure', 'cancelled')) { 'application_publish' } else { 'smoke' }
@@ -434,6 +462,39 @@ jobs:
             $attempt.result = 'failed'
           }
           $attempt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'deployment-attempt.json') -Encoding UTF8
+          $candidate = [ordered]@{
+            commit_sha = $env:RELEASE_COMMIT_SHA
+            run_id = $env:RELEASE_RUN_ID
+            api_artifact_name = 'api'
+            api_sha256 = $null
+            dacpac_artifact_name = 'dacpac'
+            dacpac_sha256 = $null
+            state = $(if ($attempt.result -eq 'failed') { 'staging_failed' } else { 'built' })
+            staging_validation_state = 'not_validated'
+            staging_validation_reference = $null
+            promotion_authorized = $false
+          }
+          if ($manifestVerified) {
+            $candidate.api_sha256 = $manifest.api.sha256
+            $candidate.dacpac_sha256 = $manifest.database.sha256
+          }
+          if ($stagingValidated) {
+            $candidate.state = 'production_blocked'
+            $candidate.staging_validation_state = 'staging_validated'
+            $candidate.staging_validation_reference = @{
+              deployment_run_id = $env:GITHUB_RUN_ID
+              artifact = 'staging-deployment-attempt'
+              attempt_file = 'deployment-attempt.json'
+              attempt_sha256 = (Get-FileHash -LiteralPath (Join-Path $evidenceDirectory 'deployment-attempt.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $candidate | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'candidate-release.json') -Encoding UTF8
+          "Candidate state=$($candidate.state); staging_validation=$($candidate.staging_validation_state); promotion_authorized=false." |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          if (-not $manifestVerified -or -not $candidateBindingValid -or
+              ($env:SMOKE_RESULT -eq 'success' -and -not $stagingValidated)) {
+            throw 'Candidate evidence is incomplete or inconsistent; no validation or promotion is authorized.'
+          }
           "Staging: result=$($attempt.result); transaction_scope=$($attempt.transaction_scope); postdeploy_result=$($attempt.postdeploy_result); failure_state_verification=$($attempt.failure_state_verification). No rollback is inferred from an exit code." |
             Add-Content -Path $env:GITHUB_STEP_SUMMARY
 

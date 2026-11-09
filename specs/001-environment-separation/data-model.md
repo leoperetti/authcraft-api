@@ -41,6 +41,25 @@ del destino y no forman parte del par inmutable de paquetes.
 Hash distinto, versión superada o evidencia staging de otro release invalida promoción.
 `production_blocked` es el estado previsto mientras no haya protección compatible.
 
+En packaging manual sobre main se genera el registro inicial
+`candidate-release.json`, separado del manifiesto contractual. Verifica identidad
+commit/run, nombres de artefactos y formato de hashes; registra created_at UTC,
+state=built, staging_validation_state=not_validated, referencia null y
+promotion_authorized=false. El artefacto `candidate-release` se retiene 30 dias.
+PR no genera ni sube este registro. No se modifica retrospectivamente el registro
+inicial ni se exige a candidatos historicos que nunca lo generaron.
+
+La reanudacion Staging conserva `candidate-release.json` junto al intento, sin
+modificar el manifiesto original. Incluye commit/run y hashes del manifiesto
+coincidente; si falta evidencia no inventa hashes. Un bloqueo previo conserva
+built; un intento fallido registra staging_failed. Solo con todas las etapas
+aprobadas y evidencia SQL del mismo candidato registra production_blocked,
+`staging_validation_state=staging_validated` y `staging_validation_reference`
+(run de despliegue, artefacto, archivo y SHA-256 del intento). Los demas casos
+dejan esa referencia null. `promotion_authorized=false` siempre: ese registro no
+autoriza Production. Evidencia ausente/inconsistente falla explicitamente el
+paso de registro y no convierte un smoke aislado en validacion completa.
+
 ## DeploymentAttempt
 
 Extension implementada localmente 2026-11-09, sin tablas nuevas:

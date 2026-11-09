@@ -83,7 +83,10 @@ public sealed class StagingPublisherVerificationTests
         Assert.DoesNotContain("dotnet publish", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("msbuild ", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("authcraft-api --src-path", workflow, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("production", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("production", workflow.Replace("production_blocked", "", StringComparison.Ordinal),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("production_blocked", workflow, StringComparison.Ordinal);
+        Assert.Contains("candidate-release.json", workflow, StringComparison.Ordinal);
         var smokeCredentialsGate = workflow.IndexOf("Require synthetic Staging smoke credentials", StringComparison.Ordinal);
         var azureLogin = workflow.IndexOf("Log in to the Staging publisher through OIDC", StringComparison.Ordinal);
         var preflight = workflow.IndexOf("Verify release provenance and current Staging gates", StringComparison.Ordinal);
@@ -121,6 +124,10 @@ public sealed class StagingPublisherVerificationTests
     [InlineData("api-failed", "failed", "separate_schema_and_postdeploy", "pending", "not_executed")]
     [InlineData("smoke-failed", "failed", "separate_schema_and_postdeploy", "pending", "unknown")]
     [InlineData("success", "succeeded", "separate_schema_and_postdeploy", "pending", "succeeded")]
+    [InlineData("inconsistent-sql", "failed", "separate_schema_and_postdeploy", "unknown", "succeeded")]
+    [InlineData("wrong-manifest", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
+    [InlineData("wrong-attempt", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
+    [InlineData("missing-manifest", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
     public async Task StagingAttempt_PreservesEvidenceWithoutInferringRollbackOrSkippedSuccess(
         string scenario, string result, string scope, string failureState, string healthResult)
     {
@@ -138,16 +145,29 @@ public sealed class StagingPublisherVerificationTests
                 summaryMatch.Groups["body"].Value.Split('\n').Select(line => line.Length >= 10 ? line[10..] : line)));
             var evidenceDirectory = Path.Combine(directory, "staging-deployment-evidence");
             Directory.CreateDirectory(evidenceDirectory);
+            var manifestDirectory = Path.Combine(directory, "staging-release", "manifest");
+            Directory.CreateDirectory(manifestDirectory);
+            File.WriteAllText(Path.Combine(manifestDirectory, "release-manifest.json"),
+                JsonSerializer.Serialize(new
+                {
+                    commit_sha = new string(scenario == "wrong-manifest" ? 'd' : 'a', 40),
+                    run_id = "12345",
+                    api = new { artifact = "api", sha256 = new string('b', 64) },
+                    database = new { artifact = "dacpac", sha256 = new string('c', 64) }
+                }));
+            if (scenario == "missing-manifest")
+                File.Delete(Path.Combine(manifestDirectory, "release-manifest.json"));
             if (scenario is not ("before-sql" or "sql-cancelled"))
             {
                 var sqlAttempt = new
                 {
                     schema_version = 1,
-                    release_run_id = "12345",
+                    release_run_id = scenario == "wrong-attempt" ? "99999" : "12345",
                     commit_sha = new string('a', 40),
+                    target_environment = "staging",
                     started_at = "2026-11-09T20:00:00Z",
-                    result = scenario == "review-blocked" ? "blocked" : scenario == "sql-failed" ? "failed" : scenario == "sql-interrupted" ? "pending" : "succeeded",
-                    schema_result = scenario == "review-blocked" ? "blocked" : scenario == "sql-failed" ? "failed" : "succeeded",
+                    result = scenario == "review-blocked" ? "blocked" : scenario is "sql-failed" or "inconsistent-sql" ? "failed" : scenario == "sql-interrupted" ? "pending" : "succeeded",
+                    schema_result = scenario == "review-blocked" ? "blocked" : scenario is "sql-failed" or "inconsistent-sql" ? "failed" : "succeeded",
                     include_transactional_scripts = true,
                     postdeploy_transaction = true,
                     transaction_scope = scope,
@@ -173,21 +193,26 @@ public sealed class StagingPublisherVerificationTests
             processInfo.Environment["DATABASE_RESULT"] = scenario switch
             {
                 "before-sql" => "skipped",
-                "review-blocked" or "sql-failed" => "failure",
+                "review-blocked" or "sql-failed" or "inconsistent-sql" => "failure",
                 "sql-interrupted" => "cancelled",
                 "sql-cancelled" => "cancelled",
                 _ => "success"
             };
-            processInfo.Environment["APPLICATION_RESULT"] = scenario is "success" or "smoke-failed"
+            var smokeSucceeds = scenario is "success" or "inconsistent-sql" or "wrong-manifest" or "wrong-attempt" or "missing-manifest";
+            processInfo.Environment["APPLICATION_RESULT"] = smokeSucceeds || scenario == "smoke-failed"
                 ? "success" : scenario == "api-failed" ? "failure" : "skipped";
-            processInfo.Environment["SMOKE_RESULT"] = scenario == "success"
+            processInfo.Environment["SMOKE_RESULT"] = smokeSucceeds
                 ? "success" : scenario == "smoke-failed" ? "failure" : "skipped";
             processInfo.Environment["AUTHCRAFT_SQL_ACCESS_TOKEN"] = "synthetic-secret-must-not-leak";
             using var process = Process.Start(processInfo)!;
             var standardOutput = process.StandardOutput.ReadToEndAsync();
             var standardError = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
-            Assert.True(process.ExitCode == 0, await standardOutput + await standardError);
+            var output = await standardOutput + await standardError;
+            var evidenceRejected = scenario is "inconsistent-sql" or "wrong-manifest" or "wrong-attempt" or "missing-manifest";
+            Assert.True(evidenceRejected ? process.ExitCode != 0 : process.ExitCode == 0, output);
+            if (evidenceRejected)
+                Assert.Contains("Candidate evidence is incomplete or inconsistent", output, StringComparison.Ordinal);
             var json = File.ReadAllText(Path.Combine(evidenceDirectory, "deployment-attempt.json"));
             using var attempt = JsonDocument.Parse(json);
             Assert.Equal(result, attempt.RootElement.GetProperty("result").GetString());
@@ -197,6 +222,30 @@ public sealed class StagingPublisherVerificationTests
             Assert.DoesNotContain("rolled_back", json, StringComparison.Ordinal);
             Assert.DoesNotContain("synthetic-secret-must-not-leak", json + File.ReadAllText(Path.Combine(directory, "summary.txt")), StringComparison.Ordinal);
             Assert.Equal(30, attempt.RootElement.GetProperty("report_retention_days").GetInt32());
+            using var candidate = JsonDocument.Parse(File.ReadAllText(
+                Path.Combine(evidenceDirectory, "candidate-release.json")));
+            var expectedCandidateState = scenario == "success" ? "production_blocked"
+                : result == "failed" ? "staging_failed" : "built";
+            Assert.Equal(expectedCandidateState, candidate.RootElement.GetProperty("state").GetString());
+            Assert.Equal("12345", candidate.RootElement.GetProperty("run_id").GetString());
+            Assert.Equal(new string('a', 40), candidate.RootElement.GetProperty("commit_sha").GetString());
+            Assert.Equal(scenario is "wrong-manifest" or "missing-manifest" ? null : new string('b', 64),
+                candidate.RootElement.GetProperty("api_sha256").GetString());
+            Assert.Equal(scenario is "wrong-manifest" or "missing-manifest" ? null : new string('c', 64),
+                candidate.RootElement.GetProperty("dacpac_sha256").GetString());
+            Assert.False(candidate.RootElement.GetProperty("promotion_authorized").GetBoolean());
+            if (scenario == "success")
+            {
+                Assert.Equal("staging_validated", candidate.RootElement.GetProperty("staging_validation_state").GetString());
+                Assert.Equal("23456", candidate.RootElement.GetProperty("staging_validation_reference").GetProperty("deployment_run_id").GetString());
+                var attemptHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    File.ReadAllBytes(Path.Combine(evidenceDirectory, "deployment-attempt.json")))).ToLowerInvariant();
+                Assert.Equal(attemptHash, candidate.RootElement.GetProperty("staging_validation_reference").GetProperty("attempt_sha256").GetString());
+            }
+            else
+            {
+                Assert.Equal(JsonValueKind.Null, candidate.RootElement.GetProperty("staging_validation_reference").ValueKind);
+            }
         }
         finally
         {

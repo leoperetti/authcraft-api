@@ -94,6 +94,15 @@ provenir de la misma ejecución de construcción autorizada, no de entradas libr
 Retener paquetes de versión estable y evidencia por el período de recuperación
 acordado antes de habilitar publicación; si expiraron, bloquear promoción/recuperación.
 
+El registro adicional `candidate-release.json` no agrega campos al manifiesto ni
+cambia los hashes de los paquetes. En packaging manual main se publica separado
+como artefacto `candidate-release` (30 dias): identidad y hashes del manifiesto,
+created_at UTC, state=built, staging_validation_state=not_validated,
+staging_validation_reference=null y promotion_authorized=false.
+No se genera en PR y no constituye autorizacion ni evidencia de despliegue.
+La reanudacion conserva su propio registro actualizado con el intento, no
+sobrescribe el artefacto original ni invalida candidatos historicos por su ausencia.
+
 - Disparadores remotos: push main y workflow_dispatch sobre main; PR solo valida.
 - Permisos globales contents:read; id-token:write únicamente para jobs Azure autorizados.
 - Serialización de publicación completa, sin cancelar trabajos que ya modifican bases.

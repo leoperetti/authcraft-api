@@ -31,9 +31,25 @@ T069 completada con el run review-only
 commit `ceaa5258111e266cbebaacf733869f4e9ad3cd47`: los tres jobs pasan,
 paquetes/manifiesto verificados y SQL original aceptado por el gate local.
 SqlPackage 170.4.53.0 y hash del ejecutable coinciden con los ensayos locales.
-No se publico SQL/API ni se cambiaron permisos. T070 (revision autenticada) sigue
-pendiente; ver [hashes y plantilla sin aprobar](../../docs/environments.md#evaluacion-review-only-nueva-42705333969).
+No se publico SQL/API ni se cambiaron permisos. T070 completada: el responsable
+publico la [revision autenticada](https://github.com/leoperetti/authcraft-api/issues/11#issuecomment-6752655094),
+verificada por el parser para este candidato. Ver
+[hashes originales](../../docs/environments.md#evaluacion-review-only-nueva-42705333969)
+y [estado de revision](../../docs/environments.md#revision-autenticada-del-candidato-42705333969).
+Permisos/revocacion y autorizacion operacional siguen pendientes.
 Este procedimiento no ejecuta ni autoriza Publish en Azure.
+
+La reanudacion incorpora localmente el registro CandidateRelease: conserva
+`candidate-release.json` en `staging-deployment-attempt` (30 dias). Un exito
+integral acredita staging_validated, vincula el hash del intento y deja
+state=production_blocked/promotion_authorized=false; un smoke aislado no basta.
+Este cambio aun no fue ejecutado en GitHub ni altera el candidato revisado.
+
+El packaging manual main tambien incorpora localmente el registro inicial built,
+con timestamp UTC e identidad/hashes del manifiesto. Se sube en el artefacto
+separado `candidate-release` por 30 dias; PR no lo genera. No autoriza despliegue,
+no cambia el manifiesto contractual y no es requisito retroactivo para el
+candidato revisado 42705333969. Falta comprobar este cambio en Actions.
 
 1. Construir el DACPAC con el comando MSBuild de esta guia. Verificar que ambos
    scripts usen `IncludeTransactionalScripts=True` para DeployReport, Script,
@@ -64,8 +80,8 @@ Este procedimiento no ejecuta ni autoriza Publish en Azure.
    nuevos. El run `42692449745` y sus revisiones previas no acreditan esta opcion.
    Hasta completar estos gates, no ejecutar el workflow de reanudacion.
 
-Para el candidato actual, revisar personalmente los artefactos del run 42705333969
-y publicar la decision autenticada en #11 segun la plantilla de ambientes.
+Para el candidato actual ya existe decision autenticada en #11; el publicador
+debe reconsultarla y reevaluar el destino antes de Publish.
 Los campos pending de esa plantilla bloquean deliberadamente: no convertirlos
 en approved/accepted sin completar la revision. No reutilizar comentarios de
 runs anteriores. Aun despues de revisar faltan autorizacion operativa y permisos

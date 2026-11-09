@@ -97,6 +97,37 @@ jobs:
           "Release packages created for commit $env:GITHUB_SHA. This workflow does not deploy to Azure." |
             Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
+      - name: Record built candidate
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDirectory = Join-Path $env:RUNNER_TEMP 'authcraft-release'
+          $manifest = Get-Content -LiteralPath (Join-Path $releaseDirectory 'release-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($manifest.commit_sha -cne $env:GITHUB_SHA -or
+              [string]$manifest.run_id -cne $env:GITHUB_RUN_ID -or
+              $manifest.api.artifact -cne 'api' -or $manifest.database.artifact -cne 'dacpac' -or
+              $manifest.api.sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+              $manifest.database.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+            throw 'The built candidate manifest does not match this packaging run.'
+          }
+          $candidate = [ordered]@{
+            commit_sha = $manifest.commit_sha
+            run_id = [string]$manifest.run_id
+            created_at = [DateTimeOffset]::UtcNow.ToString('o')
+            api_artifact_name = $manifest.api.artifact
+            api_sha256 = $manifest.api.sha256
+            dacpac_artifact_name = $manifest.database.artifact
+            dacpac_sha256 = $manifest.database.sha256
+            state = 'built'
+            staging_validation_state = 'not_validated'
+            staging_validation_reference = $null
+            promotion_authorized = $false
+          }
+          $candidate | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $releaseDirectory 'candidate-release.json') -Encoding UTF8
+          "Candidate commit=$($candidate.commit_sha); run=$($candidate.run_id); state=built; staging_validation=not_validated; promotion_authorized=false. No deployment was performed." |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
       - name: Upload API package
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
@@ -121,6 +152,15 @@ jobs:
         with:
           name: release-manifest
           path: ${{ runner.temp }}/authcraft-release/release-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload built candidate record
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-release
+          path: ${{ runner.temp }}/authcraft-release/candidate-release.json
           if-no-files-found: error
           retention-days: 30
 

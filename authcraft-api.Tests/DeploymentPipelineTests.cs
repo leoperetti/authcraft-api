@@ -5,6 +5,95 @@ namespace authcraft_api.Tests;
 
 public sealed class DeploymentPipelineTests
 {
+    [Theory]
+    [InlineData("success", true)]
+    [InlineData("wrong-run", false)]
+    [InlineData("wrong-commit", false)]
+    [InlineData("wrong-hash", false)]
+    [InlineData("missing-manifest", false)]
+    [InlineData("invalid-json", false)]
+    [InlineData("wrong-artifact", false)]
+    [InlineData("wrong-database-hash", false)]
+    public void Packaging_RecordsBuiltCandidateWithoutAuthorizingDeployment(string scenario, bool succeeds)
+    {
+        using var sandbox = new PipelineSandbox();
+        Assert.Equal(0, sandbox.CreateManifest().ExitCode);
+        var workflow = File.ReadAllText(Path.Combine(sandbox.RepositoryRoot,
+            ".github", "workflows", "main_authcraft-api-staging.yml")).ReplaceLineEndings("\n");
+        var match = System.Text.RegularExpressions.Regex.Match(workflow,
+            @"(?s)- name: Record built candidate\n.*?        run: \|\n(?<body>.*?)\n      - name: Upload API package");
+        Assert.True(match.Success);
+        var releaseDirectory = Path.Combine(sandbox.DirectoryPath, "authcraft-release");
+        Directory.CreateDirectory(releaseDirectory);
+        var manifestPath = Path.Combine(releaseDirectory, "release-manifest.json");
+        var manifestText = File.ReadAllText(sandbox.ManifestPath);
+        if (scenario == "wrong-run")
+            manifestText = manifestText.Replace("12345", "99999", StringComparison.Ordinal);
+        if (scenario == "wrong-commit")
+            manifestText = manifestText.Replace(sandbox.CommitSha, new string('d', 40), StringComparison.Ordinal);
+        if (scenario == "wrong-hash")
+        {
+            using var manifest = JsonDocument.Parse(manifestText);
+            manifestText = manifestText.Replace(
+                manifest.RootElement.GetProperty("api").GetProperty("sha256").GetString()!, "invalid", StringComparison.Ordinal);
+        }
+        if (scenario == "wrong-database-hash")
+        {
+            using var manifest = JsonDocument.Parse(manifestText);
+            manifestText = manifestText.Replace(
+                manifest.RootElement.GetProperty("database").GetProperty("sha256").GetString()!, "invalid", StringComparison.Ordinal);
+        }
+        if (scenario == "wrong-artifact")
+            manifestText = manifestText.Replace("\"dacpac\"", "\"unexpected\"", StringComparison.Ordinal);
+        if (scenario == "invalid-json")
+            manifestText = "{";
+        if (scenario != "missing-manifest")
+            File.WriteAllText(manifestPath, manifestText);
+        var scriptPath = Path.Combine(sandbox.DirectoryPath, "candidate.ps1");
+        var body = string.Join("\n", match.Groups["body"].Value.Split('\n')
+            .Select(line => line.Length >= 10 ? line[10..] : line));
+        File.WriteAllText(scriptPath, $"""
+            $env:RUNNER_TEMP = '{sandbox.DirectoryPath.Replace("'", "''", StringComparison.Ordinal)}'
+            $env:GITHUB_SHA = '{sandbox.CommitSha}'
+            $env:GITHUB_RUN_ID = '12345'
+            $env:GITHUB_STEP_SUMMARY = '{Path.Combine(sandbox.DirectoryPath, "summary.txt").Replace("'", "''", StringComparison.Ordinal)}'
+            {body}
+            """);
+        var result = sandbox.RunPowerShellFile(scriptPath);
+        Assert.True(succeeds ? result.ExitCode == 0 : result.ExitCode != 0, result.Output);
+        var candidatePath = Path.Combine(releaseDirectory, "candidate-release.json");
+        if (!succeeds)
+        {
+            Assert.False(File.Exists(candidatePath));
+            return;
+        }
+        using var candidate = JsonDocument.Parse(File.ReadAllText(candidatePath));
+        Assert.Equal("built", candidate.RootElement.GetProperty("state").GetString());
+        Assert.Equal(sandbox.CommitSha, candidate.RootElement.GetProperty("commit_sha").GetString());
+        Assert.Equal("12345", candidate.RootElement.GetProperty("run_id").GetString());
+        Assert.Equal("api", candidate.RootElement.GetProperty("api_artifact_name").GetString());
+        Assert.Equal("dacpac", candidate.RootElement.GetProperty("dacpac_artifact_name").GetString());
+        Assert.False(candidate.RootElement.GetProperty("promotion_authorized").GetBoolean());
+        Assert.Equal("not_validated", candidate.RootElement.GetProperty("staging_validation_state").GetString());
+        Assert.Equal(JsonValueKind.Null, candidate.RootElement.GetProperty("staging_validation_reference").ValueKind);
+        Assert.True(DateTimeOffset.TryParse(candidate.RootElement.GetProperty("created_at").GetString(), out _));
+        using var originalManifest = JsonDocument.Parse(File.ReadAllText(sandbox.ManifestPath));
+        Assert.Equal(originalManifest.RootElement.GetProperty("api").GetProperty("sha256").GetString(),
+            candidate.RootElement.GetProperty("api_sha256").GetString());
+        Assert.Equal(originalManifest.RootElement.GetProperty("database").GetProperty("sha256").GetString(),
+            candidate.RootElement.GetProperty("dacpac_sha256").GetString());
+        Assert.Equal(File.ReadAllText(sandbox.ManifestPath), File.ReadAllText(manifestPath));
+        Assert.Contains("state=built", File.ReadAllText(Path.Combine(sandbox.DirectoryPath, "summary.txt")), StringComparison.Ordinal);
+        var upload = System.Text.RegularExpressions.Regex.Match(workflow,
+            @"(?s)- name: Upload built candidate record\n(?<body>.*?)\n  verify-staging-publisher:");
+        Assert.True(upload.Success);
+        Assert.Contains("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+            upload.Groups["body"].Value, StringComparison.Ordinal);
+        Assert.Contains("name: candidate-release", upload.Groups["body"].Value, StringComparison.Ordinal);
+        Assert.Contains("retention-days: 30", upload.Groups["body"].Value, StringComparison.Ordinal);
+        Assert.Contains("if-no-files-found: error", upload.Groups["body"].Value, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Manifest_ContainsSameRunAndSha256ForBothPackages()
     {

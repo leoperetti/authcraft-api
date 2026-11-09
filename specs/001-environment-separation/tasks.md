@@ -395,6 +395,20 @@ No agregar tablas para el modelo operativo de publicaciones.
   permisos de lectura/revision para el commit 63ed699. No se concedieron ni
   probaron grants DacFx de publicacion; T037 sigue pendiente.
 
+  Diagnostico autorizado posterior a T070: conexion AccessToken a Staging exitosa.
+  Sesion administrativa con CONTROL/ALTER ANY ROLE/IMPERSONATE y db_owner=1;
+  publicador externo unico sin db_owner. Impersonacion de sesion confirma
+  CONNECT/VIEW DEFINITION=1, sin ALTER/CONTROL/CREATE TABLE/ALTER dbo ni
+  SELECT/INSERT de providers. Sin grants ni Publish. T037 sigue pendiente hasta
+  probar concesion/revocacion temporal y verificar permisos elevados efectivos.
+  Ensayo posterior autorizado 2026-11-09T22:10:22Z: ADD MEMBER db_owner solo
+  Staging, inspeccion de permisos elevados y DROP MEMBER inmediato en finally.
+  Conexion nueva confirma restauracion exacta de baseline: db_owner/ALTER/
+  CONTROL/CREATE TABLE/ALTER dbo/SELECT e INSERT providers vuelven a 0;
+  CONNECT/VIEW DEFINITION conservan 1. revocation_verified=true, published=false.
+  No se deja el rol activo. T037 sigue parcial: no se acredita Publish real DacFx
+  mediante OIDC elevado ni perfil minimo por una inspeccion administrativa.
+
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api-staging.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 
   Avance 2026-11-09: 130 pruebas focalizadas pasaron y una prueba SQL local se
@@ -419,6 +433,26 @@ No agregar tablas para el modelo operativo de publicaciones.
   con etapas/tiempos/evidencia de transaccion, y ocho simulaciones de resultados pasan.
   T039 no se completa: faltan integrar el ciclo CandidateRelease y verificar la ruta
   remota; el artefacto con acceso del repositorio no constituye aprobacion protegida.
+  Avance local posterior: la reanudacion ahora genera candidate-release.json con
+  identidad/hashes del manifiesto y estados built/staging_failed/production_blocked.
+  Solo acredita staging_validated con todas las etapas aprobadas y evidencia SQL
+  del mismo candidato; vincula el SHA-256 del intento y nunca autoriza promocion.
+  Doce escenarios simulados incluyen smoke exitoso con SQL fallido, manifiesto
+  ausente/cruzado e intento de otro release. La clase focalizada pasa 32 pruebas
+  sin omisiones. T039 sigue parcial: faltan estado built en packaging inicial,
+  ciclo protegido Production y comprobacion remota autorizada. Sin commit/push,
+  dispatch, permisos nuevos ni publicacion.
+  Avance local de packaging: main manual genera y sube el registro inicial
+  candidate-release.json como artefacto separado candidate-release (30 dias),
+  state=built, created_at UTC y promocion no autorizada. Mantiene el contrato
+  exacto del manifiesto y no exige ese nuevo artefacto a candidatos anteriores.
+  Ocho simulaciones ejecutan el bloque real y verifican identidad, hashes,
+  timestamp, manifiesto intacto y rechazos explicitos; PR no genera/sube registro.
+  Validacion conjunta final: 72 pruebas DeploymentPipelineTests y
+  StagingPublisherVerificationTests aprobadas, ninguna omitida; diff --check
+  sin errores y sin hooks registrados.
+  T039 sigue parcial hasta comprobar la ruta remota y el ciclo protegido previsto;
+  no se habilito ni implemento publicacion Production.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
@@ -585,10 +619,13 @@ acepta el SQL real conocido solo cuando satisface el contrato.
   SqlPackage 170.4.53.0 y hash del ejecutable coinciden con el ensayo LocalDB;
   SQL original pasa el gate exacto. Esquema BEGIN 48/COMMIT 252; postdeploy BEGIN
   275/guard 307/COMMIT 311/CATCH rollback 315. Sin Publish ni cambios de permisos.
-- [ ] T070 [US3] Tras T069, registrar nueva evidencia remota y solicitar revision autenticada del candidato con `include_transactional_scripts=true` y `postdeploy_transaction=true`, sin escribir aprobacion en nombre del responsable. La documentacion local no satisface esta revision remota. Mantener T033/T040 bloqueadas hasta revision exacta, cobertura por fases requerida, permisos/revocacion y autorizaciones operacionales satisfechos.
-  Evidencia y plantilla sin aprobar actualizadas para 42705333969. Consulta de #11:
-  cero comentarios de leoperetti que mencionen ese nuevo run. Falta su revision
-  manual autenticada; no se escribio ni se aprobo ningun comentario en su nombre.
+- [X] T070 [US3] Tras T069, registrar nueva evidencia remota y solicitar revision autenticada del candidato con `include_transactional_scripts=true` y `postdeploy_transaction=true`, sin escribir aprobacion en nombre del responsable. La documentacion local no satisface esta revision remota. Mantener T033/T040 bloqueadas hasta revision exacta, cobertura por fases requerida, permisos/revocacion y autorizaciones operacionales satisfechos.
+  El responsable publico personalmente el comentario 6752655094 de #11 el
+  2026-11-09T22:03:09Z. Revalidado por API y parser del publicador: autor leoperetti,
+  issue abierta, ultima decision autorizada, run 42705333969 y commit ceaa525
+  exactos, opciones/hashes y tres aceptaciones validas sin campos duplicados.
+  No se escribio aprobacion en su nombre. T037/T040 y cierre integral T033 siguen
+  pendientes: esto no concede permisos ni autoriza Publish/API.
 
 ### US4 - Recuperacion sin suponer rollback global (P2)
 

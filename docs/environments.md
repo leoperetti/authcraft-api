@@ -1273,6 +1273,49 @@ de sus nuevos hashes). El run 42692449745 no contiene esta proteccion y no debe
 reutilizarse. No hubo commit/push/dispatch, conexiones Azure, permisos nuevos ni
 Publish remoto; Production permanece bloqueado.
 
+### T039: registro inicial del candidato integrado localmente
+
+Autorizacion posterior 2026-11-09: el usuario autoriza commit/push a main y
+evaluacion review-only de Staging de estos nueve archivos, incluyendo OIDC,
+DeployReport/Script y preflight de solo lectura (con posible consumo SQL).
+Se comprobo Production disabled_manually antes del push. No autoriza Publish,
+deploy API, permisos, datos sinteticos ni operaciones sobre Production.
+El nuevo candidato requiere su propia revision exacta; no hereda la aprobacion
+del run 42705333969.
+
+El packaging manual main ahora genera `candidate-release.json` y lo sube como
+artefacto independiente `candidate-release`, retenido 30 dias. Registra built,
+created_at UTC, identidad/hashes exactos del manifiesto, staging not_validated,
+referencia de validacion null y promotion_authorized=false. PR no genera ni
+sube ese registro. No cambia paquetes ni manifiesto ni exige artefactos nuevos
+al candidato historico revisado 42705333969.
+
+Ocho simulaciones ejecutan el bloque PowerShell real: exito y rechazos por
+run/commit cruzados, hashes API/SQL invalidos, artefacto inesperado, JSON invalido
+y manifiesto ausente. Verifican tambien timestamp, hashes, manifiesto intacto
+y condiciones/retencion del upload. Pendiente validacion remota autorizada;
+T039 permanece parcial. No se realizo commit/push/dispatch ni acceso Azure.
+Validacion conjunta final: 72 pruebas aprobadas, ninguna omitida, y diff --check
+sin errores. Se conserva la advertencia CS0108 preexistente en las pruebas.
+
+### T039: estado del candidato integrado localmente en reanudacion
+
+El resumen de la reanudacion conserva `candidate-release.json` en el mismo
+artefacto `staging-deployment-attempt` (30 dias), sin cambiar paquetes/manifiesto.
+Vincula commit/run/hashes del manifiesto coincidente. Un intento bloqueado queda
+built y uno fallido staging_failed. Solo todas las etapas aprobadas junto a SQL
+exitoso, opciones/transaccion verificadas y la identidad exacta permiten registrar
+staging_validation_state=staging_validated y state=production_blocked.
+La referencia incluye run, artefacto y SHA-256 de deployment-attempt.json.
+promotion_authorized siempre permanece false.
+
+Doce simulaciones verifican resultados normales y rechazan smoke exitoso con SQL
+fallido, manifiesto ausente/cruzado e intento perteneciente a otro candidato.
+La clase focalizada pasa 32 pruebas sin omisiones. Evidencia inconsistente falla
+explicitamente el registro y no conserva una referencia de validacion.
+T039 permanece parcial: faltan packaging inicial, ciclo protegido Production y
+ejecucion remota autorizada. Cambios locales, sin commit/push/dispatch ni Azure.
+
 ### T068: evidencia transaccional del intento integrada localmente
 
 La ruta de reanudacion ahora ejecuta la prueba exacta de fases en LocalDB antes
@@ -1430,3 +1473,84 @@ pending bloquea el parser deliberadamente. Si el responsable aprueba, debe
 decidir deployment_review=approved y las tres aceptaciones accepted; una decision
 negativa, datos distintos o campos duplicados bloquean. Incluso una revision
 valida no autoriza automaticamente permisos temporales, Publish ni despliegue API.
+
+### Revision autenticada del candidato 42705333969
+
+El responsable `leoperetti` publico personalmente la
+[revision 6752655094](https://github.com/leoperetti/authcraft-api/issues/11#issuecomment-6752655094)
+el 2026-11-09T22:03:09Z. Se verifico mediante GitHub API que #11 sigue abierta,
+que el comentario pertenece a esa issue y es la ultima decision del autor
+autorizado. Test-DeploymentReviewRecord devuelve true para el run 42705333969,
+commit ceaa5258111e266cbebaacf733869f4e9ad3cd47, baseline unknown y destino Staging.
+Coinciden hashes, opciones explicitas y aceptaciones de compatibilidad API,
+impacto de datos y recuperacion, sin duplicados. T070 queda completada.
+
+No se creo ni edito el comentario en nombre del usuario. La revision queda
+sujeta a reconsulta y reevaluacion exactas antes de cualquier Publish; si se
+revoca, cambia el plan o expiran los artefactos, vuelve a bloquearse.
+
+El siguiente gate es T037: comprobar ruta administrativa y permisos efectivos
+del publicador, asi como concesion/revocacion verificable del permiso temporal.
+La autorizacion reciente fue solo commit/push y evaluacion review-only; no se
+extiende a grants, Publish SQL, despliegue API ni escrituras sinteticas. No se
+realizaron esas operaciones al registrar la revision. T033/T040 siguen abiertos
+hasta satisfacer sus demas criterios; Production permanece bloqueado.
+
+### T037: diagnostico SQL autorizado de solo lectura
+
+Tras autorizacion expresa nueva, se conecto exclusivamente a authcraft-db-staging
+con token Entra de corta duracion adquirido por Azure CLI. El token se mantuvo en
+memoria, no se imprimio ni persistio. La conexion explicita con AccessToken funciono,
+a diferencia del timeout historico de sqlcmd -G.
+
+La sesion administrativa devuelve db_owner=1, CONTROL=1, ALTER ANY ROLE=1 e
+IMPERSONATE del publicador=1. Existe exactamente un principal externo
+authcraft-staging-schema-publisher; no es miembro de db_owner.
+Con EXECUTE AS USER y REVERT de sesion (sin grants), los permisos efectivos del
+publicador fueron CONNECT=1 y VIEW DEFINITION=1; ALTER, CONTROL, CREATE TABLE,
+ALTER del esquema dbo, SELECT e INSERT de providers y db_owner devolvieron cero.
+El SID observado del principal contenido se representa como
+a2382f63-d653-47f3-82ca-9f2696f63f0a; esta observacion no cambia su identidad ni
+sustituye la verificacion OIDC del run.
+
+Esto confirma una ruta administrativa disponible y falta de permisos Publish.
+No demuestra todavia concesion/revocacion ejecutada ni permisos DacFx efectivos
+despues de elevar. T037 sigue pendiente. No se concedieron ni revocaron roles,
+no se ejecuto SQL Publish, no se desplego API ni se consulto Production.
+
+### Ensayo autorizado de concesion/revocacion temporal en Staging
+
+El usuario autorizo expresamente conceder db_owner temporalmente al publicador
+solo en authcraft-db-staging, verificar permisos y revocarlo inmediatamente,
+sin Publish. Se verifico por ARM que authcraft-api-st-id-97cc tiene clientId
+a2382f63-d653-47f3-82ca-9f2696f63f0a y principalId
+2a446033-801f-444c-985e-6519c4661632. El guard SQL uso el SID contenido observado
+en el diagnostico, sin reemplazar usuarios ni cambiar su identidad.
+
+Ensayo 2026-11-09T22:10:22.0084935Z a 22:10:23.3773349Z, exclusivamente Staging:
+
+| Permiso efectivo | Antes | Elevado | Tras revocacion |
+|------------------|-------|---------|-----------------|
+| db_owner | 0 | 1 | 0 |
+| CONNECT / VIEW DEFINITION | 1 | 1 | 1 |
+| ALTER / CONTROL / CREATE TABLE | 0 | 1 | 0 |
+| ALTER del esquema dbo | 0 | 1 | 0 |
+| SELECT / INSERT de providers | 0 | 1 | 0 |
+
+Cada inspeccion uso una conexion nueva e impersonacion de sesion del principal
+contenido seguida de REVERT. ADD MEMBER y DROP MEMBER se ejecutaron con guard
+de base/identidad y transaccion propia; la revocacion estuvo en finally. Se
+comparo cada permiso posterior con la baseline: revocation_verified=true.
+No se ejecutaron inserts, ALTER de tablas ni SqlPackage Publish. published=false.
+El publicador termino sin privilegios elevados; no se modifico Production.
+
+Evidencia sanitizada privada de sesion:
+`files/staging-temporary-role-rehearsal.json` y procedimiento exacto
+`files/Test-StagingTemporaryPublisherRole.ps1`. No contienen tokens ni claves.
+La inspeccion acredita permisos efectivos del usuario contenido, no un Publish
+real DacFx con OIDC elevado. T037 conserva ese limite y sigue pendiente de su
+validacion integral; la concesion no se dejo activa para un futuro dispatch.
+
+Antes de publicar debe coordinarse otra autorizacion y una ventana acotada con
+revocacion/verificacion incluso ante fallo, ademas de los restantes gates de
+workflow, smoke y datos sinteticos. Este ensayo no autoriza esa publicacion.
