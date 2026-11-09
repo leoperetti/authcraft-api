@@ -36,8 +36,9 @@ El 2026-11-06 se retiró con autorización la federación main de `oidc-msi-aede
 Con autorización posterior también se retiraron sus roles Website Contributor y el
 secreto GitHub `AZURE_SQL_CONNECTION_STRING`; ambas identidades se conservaron
 adjuntas, sin roles ARM ni federaciones. Esto no revoca la credencial SQL original
-ni acredita ausencia de otras copias: T029 sigue pendiente. No eliminar identidades
-por inferencia ni reactivar el workflow anterior. Ver
+ni acreditaba por si solo la ausencia de otras copias. La auditoria posterior cerro
+T029 para las rutas conocidas; T010 conserva la verificacion SQL pendiente. No
+eliminar identidades por inferencia ni reactivar el workflow anterior. Ver
 [evidencia y límites](../../docs/environments.md#retiro-autorizado-de-permisos-publicadores-2026-11-06).
 
 El inventario ahora verifica también publicadores adjuntos, roles runtime,
@@ -196,25 +197,33 @@ Run [42386493432](https://github.com/leoperetti/authcraft-api/actions/runs/42386
 solo lectura completados con OIDC real y evidencia `staging-schema-review`.
 No se ejecuto Publish ni postdeploy.
 
-Después de configurar identidad runtime, vault y grants SQL, reconciliar workflows
-y retirar rutas production, publicar un commit main desde el único flujo vigente.
-Documentar primero la recuperación y acreditar la revisión de esquema/postdeploy
-conforme al contrato; si está pendiente, no publicar. Preparar cuenta/tenant sintéticos
-staging solo tras aplicar su esquema compatible, antes del smoke, con autorización
-de la escritura y sin enviar notificaciones.
-Registrar run ID, manifiesto, hashes y reporte SQL; comprobar el destino
-`authcraft-api-staging` y base `authcraft-db-staging` antes de escribir.
+El workflow Staging reconciliado actualmente solo valida paquetes, verifica
+procedencia y metadatos, y prepara una revision. No tiene pasos Publish ni despliegue
+API. El preflight exitoso no autoriza una publicacion. Antes de implementar o ejecutar
+un flujo de publicacion, deben completarse T033/T035/T037/T038 y la autorizacion
+especifica del release. Preparar cuentas o tenants sinteticos solo despues de aplicar
+un esquema compatible, antes del smoke, con autorizacion de esa escritura y sin
+enviar notificaciones. Registrar run ID, manifiesto y hashes; comprobar destino y
+base antes de cualquier escritura.
 
-El workflow local agrega `preflight-staging` despues de `validate` y
+El workflow vigente agrega `preflight-staging` despues de `validate` y
 `verify-staging-publisher`. Consulta Actions autenticado, vuelve a descargar y
 compara API/DACPAC/manifiesto, valida el baseline contra un despliegue Staging
 exitoso verificable (o acepta `unknown` solo con bootstrap explicito y sin
 despliegues exitosos), y comprueba por OIDC metadatos ARM y el bloqueo de Production.
-El resultado esperado es `state=ready_for_review` con
+El resultado es `state=ready_for_review` con
 `deployment_authorized=false`; la revision SQL autenticada, el permiso temporal y
-Publish siguen siendo gates separados. Esta integracion local aun no se ha ejecutado
-desde Actions con OIDC ni se ha subido al remoto. No omitir el gate para probar una
-publicacion.
+Publish siguen siendo gates separados. La verificacion OIDC real se completo en el
+[run 42637441215](https://github.com/leoperetti/authcraft-api/actions/runs/42637441215):
+los tres jobs (`validate`, `verify-staging-publisher`, `preflight-staging`) pasaron,
+y los artefactos se retienen 30 dias. No hubo Publish, postdeploy, despliegue API ni
+smoke. No omitir el gate para probar una publicacion.
+
+La comprobacion funcional historica del 2026-11-06 no confirma el estado actual:
+el 2026-11-09 `/health/live` devolvio 404 y no se encontro un despliegue exitoso
+verificable del workflow nuevo. El run 42637441215 produjo un preflight con baseline
+`unknown`, no un despliegue. Consultar el [runbook de recuperacion](../../docs/deployment-recovery.md)
+y no asumir que hay una version actual confirmada para restaurar.
 
 La revision SQL debe estar en una issue abierta de `leoperetti/authcraft-api`,
 como comentario de `leoperetti`, con exactamente una linea por campo del

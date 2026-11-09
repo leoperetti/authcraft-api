@@ -19,26 +19,27 @@ En cada caso registrar ambiente, run ID, commit, version, etapa, hora UTC y
 resultado. El registro no debe incluir contrasenas, tokens, cadenas de conexion,
 valores de Key Vault ni cuerpos de autenticacion.
 
-## Preparacion inicial de staging
+## Estado actual de Staging
 
-La base staging estaba vacia. Se usa el release estable de GitHub Actions
-`41882690687`, commit `091fe2c9856fa8ba46387bc3e751fd21ca424662`, sin incluir
-los cambios locales pendientes.
+El 2026-11-06 se documento una publicacion manual del run `41882690687`,
+commit `091fe2c9856fa8ba46387bc3e751fd21ca424662`, con deployment API
+`2d9d8af3f892419b9a109a9207e9f580` y comprobaciones de login/roles. Es evidencia
+historica, no una confirmacion de que esa version siga activa ni un release de
+recuperacion aprobado.
 
-Si falla la publicacion SQL, no publicar la API y revisar el estado efectivo de
-staging: DacFx no garantiza una transaccion global. No aplicar el esquema a production.
-Si falla la API, conservar el esquema y diagnosticar identidad, vault, runtime y
-conexion; staging aun no tiene una version estable anterior para restaurar.
-No borrar/recrear bases o recursos como alternativa automatica.
+La comprobacion posterior del 2026-11-09 encontro `/health/live` devolviendo 404
+y el SHA corto de OneDeploy no pudo vincularse a un commit de este repositorio.
+No existe un despliegue satisfactorio verificable del workflow nuevo que sirva
+como baseline; por eso el preflight del run
+[42637441215](https://github.com/leoperetti/authcraft-api/actions/runs/42637441215)
+acepto `unknown` unicamente bajo el gate de bootstrap inicial. Ese run solo valido
+paquetes, OIDC, procedencia y metadatos: no publico SQL ni API.
 
-La preparacion termino satisfactoriamente: este run/commit es ahora la primera
-version estable de staging. Deployment API `2d9d8af3f892419b9a109a9207e9f580`;
-login sintetico y lectura autenticada de roles HTTP 200, tambien despues de
-deshabilitar bootstrap y reiniciar. Ver [evidencia de ambientes](environments.md).
-Los artifacts originales y su revision estan vinculados en
-[issue #10](https://github.com/leoperetti/authcraft-api/issues/10).
-Esto identifica una version recuperable, pero no acredita un ensayo completo de
-rollback ni los controles automaticos de retencion/promocion pendientes.
+Por lo tanto, no hay una version Staging actualmente confirmada como recuperable.
+La publicacion sigue bloqueada hasta revisar autenticadamente el plan exacto,
+completar y verificar los permisos SQL requeridos y autorizar expresamente ese
+release. Ver [evidencia de ambientes](environments.md). No borrar/recrear bases
+o recursos ni tratar la revision del run antiguo como autorizacion.
 
 ## Publicaciones posteriores
 

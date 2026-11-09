@@ -73,8 +73,10 @@ if (-not (Test-Path -LiteralPath $SqlPackagePath -PathType Leaf)) {
 }
 
 $artifactDirectory = Split-Path -Parent (Resolve-Path -LiteralPath $DacpacPath).Path
-$reportPath = Join-Path $artifactDirectory "$TargetEnvironment-deploy-report.xml"
-$scriptPath = Join-Path $artifactDirectory "$TargetEnvironment-deploy.sql"
+$evaluationId = [Guid]::NewGuid().ToString('N')
+$evaluationPrefix = if ($Mode -eq 'Publish') { 'publish' } else { 'evaluation' }
+$reportPath = Join-Path $artifactDirectory "$TargetEnvironment-$evaluationPrefix-$ExpectedRunId-$evaluationId-report.xml"
+$scriptPath = Join-Path $artifactDirectory "$TargetEnvironment-$evaluationPrefix-$ExpectedRunId-$evaluationId-script.sql"
 $commonArguments = @(
     "/SourceFile:$((Resolve-Path -LiteralPath $DacpacPath).Path)",
     "/TargetServerName:tcp:$targetServer,1433",
@@ -232,11 +234,6 @@ function Get-AuthenticatedReview {
 }
 
 try {
-    foreach ($outputPath in @($reportPath, $scriptPath)) {
-        if (Test-Path -LiteralPath $outputPath) {
-            Remove-Item -LiteralPath $outputPath -Force
-        }
-    }
     $reportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$reportPath"))
     if ($reportExitCode -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
         throw "SqlPackage DeployReport failed. No database changes were made. $script:sqlPackageFailure"
@@ -287,13 +284,8 @@ try {
     $issueUri = "https://api.github.com/repos/$repository/issues/$ReviewIssueNumber"
     $review = Get-AuthenticatedReview
 
-    $recheckReportPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck-report.xml"
-    $recheckScriptPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck.sql"
-    foreach ($outputPath in @($recheckReportPath, $recheckScriptPath)) {
-        if (Test-Path -LiteralPath $outputPath) {
-            Remove-Item -LiteralPath $outputPath -Force
-        }
-    }
+    $recheckReportPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck-$ExpectedRunId-$evaluationId-report.xml"
+    $recheckScriptPath = Join-Path $artifactDirectory "$TargetEnvironment-recheck-$ExpectedRunId-$evaluationId-script.sql"
     $recheckReportExitCode = Invoke-SqlPackage -Path $SqlPackagePath -Arguments (@('/Action:DeployReport') + $commonArguments + @("/OutputPath:$recheckReportPath"))
     if ($recheckReportExitCode -ne 0 -or -not (Test-Path -LiteralPath $recheckReportPath -PathType Leaf)) {
         throw "SqlPackage DeployReport revalidation failed. Publication is blocked. $script:sqlPackageFailure"
@@ -327,6 +319,10 @@ try {
         commit_sha = $ExpectedCommitSha.ToLowerInvariant()
         run_id = $ExpectedRunId
         dacpac_sha256 = $dacpacHash
+        deploy_report_sha256 = $reportHash
+        deploy_script_sha256 = $scriptHash
+        deploy_report_path = $reportPath
+        deploy_script_path = $scriptPath
         review_comment_id = $review.id
     } | ConvertTo-Json -Compress
 }

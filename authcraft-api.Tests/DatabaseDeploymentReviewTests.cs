@@ -17,9 +17,23 @@ public sealed class DatabaseDeploymentReviewTests
         using var published = JsonDocument.Parse(result.Output);
         Assert.Equal("published", published.RootElement.GetProperty("state").GetString());
         Assert.Equal(42, published.RootElement.GetProperty("review_comment_id").GetInt32());
+        var reportPath = published.RootElement.GetProperty("deploy_report_path").GetString()!;
+        var scriptPath = published.RootElement.GetProperty("deploy_script_path").GetString()!;
+        Assert.NotEqual(sandbox.ReviewedReportPath, reportPath);
+        Assert.NotEqual(sandbox.ReviewedScriptPath, scriptPath);
+        Assert.True(File.Exists(reportPath));
+        Assert.True(File.Exists(scriptPath));
+        Assert.Equal(
+            published.RootElement.GetProperty("deploy_report_sha256").GetString(),
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(reportPath))).ToLowerInvariant());
+        Assert.Equal(
+            published.RootElement.GetProperty("deploy_script_sha256").GetString(),
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(scriptPath))).ToLowerInvariant());
         Assert.Equal(
             ["/Action:DeployReport", "/Action:Script", "/Action:DeployReport", "/Action:Script", "/Action:Publish"],
             sandbox.Actions);
+        Assert.Equal("previous reviewed report", File.ReadAllText(sandbox.ReviewedReportPath));
+        Assert.Equal("previous reviewed SQL", File.ReadAllText(sandbox.ReviewedScriptPath));
         Assert.DoesNotContain("native diagnostic", result.Output + result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -103,10 +117,14 @@ public sealed class DatabaseDeploymentReviewTests
             _apiPackagePath = Path.Combine(_directory, "candidate-api.zip");
             _activeApiVersionPath = Path.Combine(_directory, "active-api-version.txt");
             _recentWritesPath = Path.Combine(_directory, "recent-writes.txt");
+            ReviewedReportPath = Path.Combine(_directory, "staging-deploy-report.xml");
+            ReviewedScriptPath = Path.Combine(_directory, "staging-deploy.sql");
             SchemaStatePath = Path.Combine(_directory, "schema-state.txt");
             File.WriteAllText(_apiPackagePath, "synthetic-candidate-api-package");
             File.WriteAllText(_activeApiVersionPath, "synthetic-active-api-version");
             File.WriteAllText(_recentWritesPath, "synthetic-recent-user-write");
+            File.WriteAllText(ReviewedReportPath, "previous reviewed report");
+            File.WriteAllText(ReviewedScriptPath, "previous reviewed SQL");
             File.WriteAllText(SchemaStatePath, "schema-before-publish");
             var dacpacPath = Path.Combine(_directory, "database.dacpac");
             var manifestPath = Path.Combine(_directory, "manifest.json");
@@ -140,7 +158,7 @@ public sealed class DatabaseDeploymentReviewTests
                 }
                 if ($action -eq '/Action:Script') {
                     $path = @($args | Where-Object { $_ -like '/DeployScriptPath:*' })[0].Substring('/DeployScriptPath:'.Length)
-                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recheck-output' -and $path -like '*recheck.sql') { exit 0 }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recheck-output' -and $path -like '*recheck-*-script.sql') { exit 0 }
                     $sql = 'CREATE TABLE dbo.synthetic_test (id INT);'
                     if ($env:REVIEW_TEST_SCENARIO -eq 'destructive-plan') { $sql = 'DROP TABLE dbo.existing_data;' }
                     if (Test-Path -LiteralPath $env:REVIEW_TEST_DRIFT_PATH) { $sql += ' ALTER TABLE dbo.synthetic_test ADD other_id INT;' }
@@ -189,8 +207,11 @@ public sealed class DatabaseDeploymentReviewTests
                     $stagingBaseline = 'unknown'
                     if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-staging-baseline') { $stagingBaseline = '{{new string('b', 40)}}' }
                     $dacpacHash = (Get-FileHash -LiteralPath '{{dacpacPath}}' -Algorithm SHA256).Hash.ToLowerInvariant()
-                    $reportHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy-report.xml")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
-                    $sqlHash = (Get-FileHash -LiteralPath '{{Path.Combine(_directory, "staging-deploy.sql")}}' -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $reportFiles = @(Get-ChildItem -LiteralPath '{{_directory}}' -Filter 'staging-publish-*-report.xml')
+                    $sqlFiles = @(Get-ChildItem -LiteralPath '{{_directory}}' -Filter 'staging-publish-*-script.sql')
+                    if ($reportFiles.Count -ne 1 -or $sqlFiles.Count -ne 1) { throw 'Expected one isolated Publish evaluation.' }
+                    $reportHash = (Get-FileHash -LiteralPath $reportFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $sqlHash = (Get-FileHash -LiteralPath $sqlFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                     $scriptDatabaseOptions = 'false'
                     if ($env:REVIEW_TEST_SCENARIO -eq 'wrong-options') { $scriptDatabaseOptions = 'true' }
                     $body = @"
@@ -250,6 +271,8 @@ public sealed class DatabaseDeploymentReviewTests
         public string SyntheticToken { get; } = $"synthetic-{Guid.NewGuid():N}";
         public string[] Actions => File.Exists(_actionLog) ? File.ReadAllLines(_actionLog) : [];
         public string SchemaStatePath { get; }
+        public string ReviewedReportPath { get; }
+        public string ReviewedScriptPath { get; }
 
         public string[] SnapshotProtectedFiles()
         {

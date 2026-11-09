@@ -6,13 +6,20 @@ Se preservan los cambios locales de invitaciones, signup, bootstrap y el proyect
 pruebas. No pertenecen a esta feature y no se revierten. La solucion ya incluye
 `authcraft-api.Tests`; se reutiliza su hosting de pruebas.
 
-El workflow production remoto (ID `374894897`) esta `disabled_manually`; el de
-staging (ID `407226559`) permanece `active`. El commit remoto main verificado es
-`091fe2c9856fa8ba46387bc3e751fd21ca424662`. No se modifico el servicio production.
-El workflow staging remoto sigue sin cumplir el recorrido completo de
-esquema/aprobacion/publicacion. Ahora solo valida paquetes y permite diagnostico
-manual OIDC/SQL, como acredita la ejecucion descrita al final de esta guia.
-No habilitar publicacion hasta satisfacer los gates pendientes.
+El workflow Production remoto (ID `374894897`) esta `disabled_manually`; el de
+Staging (ID `407226559`) permanece `active`. En la revalidacion de solo lectura
+del 2026-11-09, `main` remoto y local coinciden en
+`e9713e2b27f0af21447463a40a31fa5322a888aa`; no habia ejecuciones Production
+encoladas ni en curso entre las 15 consultadas. No se modifico el servicio
+Production.
+
+El workflow Staging valida paquetes y, cuando se solicita, ejecuta el preflight
+de procedencia, baseline y metadatos ARM. El preflight solo deja el release
+`ready_for_review` con `deployment_authorized=false`: no publica SQL ni API.
+El run [42637441215](https://github.com/leoperetti/authcraft-api/actions/runs/42637441215)
+paso `validate`, `verify-staging-publisher` y `preflight-staging`; no hubo
+Publish, postdeploy, despliegue API ni smoke. La publicación sigue bloqueada
+hasta completar los gates y obtener autorizacion especifica para el release.
 
 Revision de Actions 2026-11-06: el workflow staging remoto sigue activo y su ultima
 ejecucion (`41882690684`) fallo en `Build with dotnet` con `MSB4278` al intentar
@@ -24,8 +31,7 @@ con autorizacion; no tiene pasos de publicacion. Incluye un job OIDC opcional de
 diagnostico SQL de solo lectura y, al solicitar evaluacion de esquema, un job
 `preflight-staging` para verificar procedencia, baseline, metadatos ARM y que
 Production siga deshabilitado. Ese preflight termina en `ready_for_review` con
-`deployment_authorized=false`; no despliega a Azure. La integracion local aun no se
-ha ejecutado desde Actions con OIDC ni se ha subido al remoto.
+`deployment_authorized=false`; no despliega a Azure.
 
 El repositorio GitHub es publico por decision manual del usuario. Production sigue
 bloqueado: no hay environments ni proteccion efectiva de `main`, y el workflow de
@@ -46,6 +52,13 @@ Verificacion 2026-11-07:
 - Git Bash, Azure CLI y gh disponibles. MSBuild y SqlPackage no estan en PATH;
   ejecutar sus rutas completas o configurar PATH en la misma sesion.
 - `.gitignore` ya protege bin, obj, packages, archivos de usuario, logs y `.env*`.
+
+Revalidacion local 2026-11-09: `dotnet build` Release de la API paso. El comando
+`msbuild` no esta en PATH; la ruta MSBuild localizada bajo SSMS 22 no encuentra
+`Microsoft.Data.Tools.Schema.SqlTasks.targets` (MSB4226), por lo que este host no
+pudo reconstruir el DACPAC. El build SQL satisfactorio indicado arriba corresponde
+a la verificacion anterior del 2026-11-07; no instalar herramientas durante esta
+revision ni confundir esta limitacion local con un resultado de Actions.
 
 ## Autorizaciones
 
@@ -157,8 +170,10 @@ A las 16:18 UTC, tras confirmar los cambios concretos con el usuario:
 No se eliminaron identidades, se modifico configuracion de la API, se reinicio,
 se publico ni se conecto SQL. Eliminar el secreto GitHub no revoca la credencial
 original SQL ni copias/tokens ya emitidos; no se puede afirmar cero rutas efectivas
-de modificacion SQL. **T029 permanece pendiente** hasta resolver esa evidencia y
-los restantes gates de T028/T010, sin rotar credenciales de runtime por inferencia.
+de modificacion SQL. Ese era el estado registrado en esta verificacion del
+2026-11-06; la auditoria posterior cerro T029 para las rutas conocidas, segun la
+evidencia mas reciente de esta guia. T010 continua pendiente. No rotar credenciales
+de runtime por inferencia.
 
 `Test-EnvironmentInventory.ps1` ahora incluye identidades adjuntas, roles ARM del
 runtime y de todos los publicadores observados, federaciones, politicas SCM/FTP y
@@ -241,14 +256,14 @@ Consulta posterior de solo lectura con `gh api`:
 - Secret Scanning responde que está deshabilitado. No se pudo comprobar mediante
   alertas la ausencia de secretos.
 
-Resultado: Production permanece bloqueado. `AZURE_SQL_CONNECTION_STRING` no está
-configurado actualmente en GitHub según la enumeración; el `DELETE` 404 no demuestra
-que la solicitud lo eliminara. No se obtuvo evidencia de permisos SQL y ninguna
-credencial se revocó. T010 y T029 permanecen pendientes hasta verificar permisos e
-identidad y confirmar cero rutas de publicación. T047 sigue pendiente de T029 y de
-autorización explícita de configuración, aunque la cuenta propietaria quedó elegida
-como reviewer futuro. La publicación del repositorio no equivale a configurar
-aprobación ni autoriza un despliegue.
+Resultado de esa consulta: Production permanecio bloqueado. La enumeracion no
+encontro `AZURE_SQL_CONNECTION_STRING`; el `DELETE` 404 no demostro que la solicitud
+lo eliminara. Esa lectura no obtuvo evidencia de permisos SQL y no revoco
+credenciales. La verificacion posterior de cierre de T029 se registra en la seccion
+mas reciente de esta guia: el workflow Production sigue deshabilitado y se retiraron
+sus credenciales conocidas de Actions; T029 esta completo, pero T010 y T047 siguen
+pendientes. La publicacion del repositorio no equivale a configurar aprobacion ni
+autoriza un despliegue.
 
 ### Checklist fija e informe por intento Production
 
@@ -265,7 +280,7 @@ bloqueado por los gates de aprobacion y proteccion. Una interrupcion de GitHub o
 antes de generar/subir el informe no es un resultado satisfactorio ni garantiza un artefacto.
 La guia y el informe no autorizan publicaciones.
 
-### Preflight y revision SQL: avance local del 2026-11-09
+### Preflight y revision SQL: verificacion en Actions del 2026-11-09
 
 `Test-ReleasePreflight.ps1` consulta Actions mediante `gh` autenticado: verifica
 repositorio, referencia, commit, evento y job de build; rechaza artefactos duplicados,
@@ -275,30 +290,59 @@ con la ultima ejecucion satisfactoria de `deploy-staging` en Actions; un build s
 ese job no acredita un despliegue. El bootstrap `unknown` solo se acepta con el input
 explicito y cuando no existe despliegue satisfactorio registrado.
 
-El workflow local integra `preflight-staging` despues de `validate` y
+El workflow integra `preflight-staging` despues de `validate` y
 `verify-staging-publisher`. Ese job comprueba la sesion OIDC y los metadatos ARM
 limitados a Staging, la procedencia de los artefactos, el baseline y que Production
 siga deshabilitado. Su unico resultado exitoso es
 `state=ready_for_review`, `artifact_validation=verified` y
 `deployment_authorized=false`; aun requiere revision SQL autenticada, permisos
-temporales validados y un flujo separado antes de Publish. La integracion local aun
-no se ha ejecutado desde Actions con OIDC ni se ha subido al remoto.
+temporales validados y un flujo separado antes de Publish.
+
+Verificacion real 2026-11-09: el run
+[42637441215](https://github.com/leoperetti/authcraft-api/actions/runs/42637441215)
+completo `validate`, `verify-staging-publisher` y `preflight-staging` en success
+con OIDC real. El baseline `unknown` fue aceptado solo despues de comprobar que no
+habia despliegues Staging satisfactorios previos. Los artefactos API, DACPAC,
+manifiesto y `staging-schema-review` quedaron disponibles; no se ejecuto Publish,
+postdeploy, despliegue API ni smoke.
+
+Revision local de solo lectura del artefacto `staging-schema-review` del run
+42637441215:
+
+- DeployReport SHA-256:
+  `e06fff4b57ff74c22cce5d7241a30a031378f7d2ba084e74929ca5d4bbd8c466`.
+- Script SQL SHA-256:
+  `3dfab7b37839bbc09b4c00e7d1768df6cd27f569a34c7cd7fe131fb9631c9947`.
+- El reporte propone eliminar y volver a crear dos CHECK constraints de
+  `memberships` y `tenants`, alterar `invitations` para agregar columnas nullable
+  y una columna `rowversion`, y crear siete constraints. Las siete creaciones usan
+  `WITH NOCHECK`, por lo que la evidencia no valida las filas preexistentes.
+- El postdeploy hace tres INSERT condicionales en `providers` (`google`, `apple`,
+  `github`). No aparecen `DELETE`, `TRUNCATE TABLE` ni `DROP TABLE` en el script.
+
+Esta inspeccion del archivo descargado no comprueba los datos existentes ni la
+compatibilidad de la API anterior/candidata, y no constituye una revision
+autenticada. El plan exacto debe revisarse antes de cualquier Publish; no se
+ejecuto SQL ni se modifico Staging.
 
 El publicador SQL de T033 conserva el responsable permitido `leoperetti` y consulta
 por API el comentario original de una issue abierta de este repositorio. Rechaza
 campos repetidos o contradictorios, autor no permitido y revisiones de otro release,
 destino o plan. Despues de leer la revision, vuelve a generar DeployReport/Script
-con las mismas opciones, conserva la evaluacion original, compara sus hashes y
-reconsulta la aprobacion antes de Publish. Cualquier cambio exige una nueva revision.
+con las mismas opciones en archivos de evaluacion unicos, conserva los artefactos
+revisados y las reevaluaciones anteriores, compara sus hashes y reconsulta la
+aprobacion antes de Publish. Cualquier cambio exige una nueva revision.
 La salida nativa de SqlPackage no se publica: puede contener credenciales, y su
 texto no debe confundirse con el codigo de salida. Los errores de etapa son
 explicitos y sanitizados. Azure SQL requiere validacion del certificado TLS.
 
-T033 tambien permanece pendiente: estas pruebas aisladas no verifican un usuario
-contenido Entra ni sus permisos efectivos; faltan T032 y T037. La reevaluacion no
-elimina la posible deriva entre comprobacion y Publish ni garantiza atomicidad
-DacFx. El workflow consolidado debe serializar todo el despliegue y tratar
-cualquier fallo como bloqueo, sin rollback SQL automatico.
+T033 tambien permanece pendiente: las pruebas no sustituyen la revision autenticada
+del release exacto ni verifican un perfil con permisos DacFx de publicacion
+efectivamente probado. T032 ya completo su verificacion OIDC; T037 sigue pendiente
+de resolver los grants minimos/temporales y probar su revocacion. La reevaluacion
+no elimina la posible deriva entre comprobacion y Publish ni garantiza atomicidad
+DacFx. El workflow debe serializar todo despliegue y tratar cualquier fallo como
+bloqueo, sin rollback SQL automatico.
 
 Validacion local: **81/81 pruebas focalizadas** satisfactorias, incluida publicacion
 real del DACPAC en una base LocalDB descartable. Builds Release de API y SQL
@@ -398,9 +442,14 @@ abrir SQL posteriormente. El bloqueo de cliente queda resuelto para staging;
 T010 sigue pendiente para los demas runtime/publicadores. En la verificacion inicial
 no hubo cambios Azure; las operaciones autorizadas posteriores se registran abajo.
 
-## Staging operativo verificado
+## Verificacion historica de Staging: 2026-11-06
 
-Preparacion y comprobaciones: 2026-11-06 UTC.
+La siguiente evidencia describe la preparacion y comprobaciones realizadas el
+2026-11-06 UTC; no confirma que la version siga activa. En la lectura del
+2026-11-09, `/health/live` devolvio 404 y el SHA corto de OneDeploy no se pudo
+resolver a un commit de este repositorio. El preflight reciente no encontro un
+despliegue exitoso verificable para usar como baseline. Ver el estado actual al
+inicio de esta guia y el [runbook de recuperacion](deployment-recovery.md).
 
 - URL: https://authcraft-api-staging-agcwhagyend9gkcj.westus3-01.azurewebsites.net
 - API y DACPAC del run estable `41882690687`, commit
@@ -439,11 +488,12 @@ Preparacion y comprobaciones: 2026-11-06 UTC.
   con el accessToken devuelto **200**. El contrato estable usa `accessToken`,
   `tokenType`, `expiresIn`, `user`. Credentials y tokens no se registraron.
 
-La preparacion fue manual y autorizada, no una ejecucion del futuro workflow.
-GitHub Actions staging aun requiere corregir el build de la solucion SQL tradicional
-(MSB4278) y completar los gates/OIDC/promocion. El workflow staging remoto sigue
-`active`; production esta `disabled_manually`. **No hacer push a main** hasta
-reconciliar el workflow local/remoto y retirar publicadores paralelos.
+La preparacion fue manual y autorizada, no una ejecucion del workflow actual.
+Los bloqueos de build, reconciliacion y credenciales descritos en el registro
+original corresponden al estado observado entonces; posteriormente se reconcilio
+el workflow de Staging y se completaron los gates de T028/T029/T032. El workflow
+Staging actual solo valida y prepara una revision: aun no tiene ruta de publicacion.
+Production sigue `disabled_manually`.
 No se modificaron configuracion, secretos, esquema ni publicacion production.
 La comprobacion de conexion autorizada pudo reactivar su base pausada.
 
@@ -825,7 +875,7 @@ API, impacto de datos y recuperacion antes de Publish. Esa decision no aprueba e
 ni autoriza una publicacion por si sola. Production sigue sin publicador efectivo y
 no se modifico.
 
-T028/T032/T033/T035/T037/T038/T040/T041 siguen pendientes. No habilitar Production,
-no conceder aun `db_owner` y no publicar Staging hasta que el plan exacto sea
-reevaluado/revisado, el workflow de publicacion este listo y exista un procedimiento
-verificable para conceder y revocar el permiso temporal.
+T028/T029/T032 estan completos. T033/T035/T037/T038/T040/T041 siguen pendientes.
+No habilitar Production, no conceder aun `db_owner` y no publicar Staging hasta que
+el plan exacto sea reevaluado/revisado, el workflow de publicacion este listo y
+exista un procedimiento verificable para conceder y revocar el permiso temporal.
