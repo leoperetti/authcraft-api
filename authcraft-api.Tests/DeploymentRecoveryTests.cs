@@ -17,8 +17,15 @@ public sealed class DeploymentRecoveryTests
         Assert.True(evidenceIndex > publishIndex);
         var deploymentSteps = workflow[publishIndex..evidenceIndex];
         Assert.DoesNotContain("continue-on-error:", deploymentSteps, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("if:", deploymentSteps, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("always()", deploymentSteps, StringComparison.OrdinalIgnoreCase);
+        var applicationIndex = deploymentSteps.IndexOf("- name: Deploy the same API package to Staging", StringComparison.Ordinal);
+        var smokeIndex = deploymentSteps.IndexOf("- name: Verify Staging health, synthetic login, and tenant roles", StringComparison.Ordinal);
+        Assert.True(applicationIndex > 0 && smokeIndex > applicationIndex);
+        var applicationSteps = deploymentSteps[applicationIndex..];
+        Assert.Contains("if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
+            applicationSteps, StringComparison.Ordinal);
+        Assert.DoesNotContain("always()", applicationSteps, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("if:", deploymentSteps[smokeIndex..], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("if: always() && steps.permission-cleanup-login.outcome == 'success'", deploymentSteps, StringComparison.Ordinal);
         Assert.Contains("throw 'The reviewed Staging database deployment failed.'", deploymentSteps, StringComparison.Ordinal);
         Assert.DoesNotContain("RESTORE DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DROP DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
