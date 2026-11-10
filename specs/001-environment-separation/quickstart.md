@@ -13,6 +13,13 @@ Grant despues de preflight; revoke/inspeccion con always antes de API, tambien
 ante fallo. Si el runner desaparece o no verifica cleanup, revocacion administrativa
 obligatoria antes de reintentar. No es garantia de cleanup ante perdida del runner.
 
+Actualizacion: la gestion ya fue subida y ensayada sin despliegue en
+[run 42736112124](https://github.com/leoperetti/authcraft-api/actions/runs/42736112124).
+OIDC, grant/revoke y segunda verificacion idempotente aprobados;
+revocation_verified=true, published=false. Publicador sin db_owner y gestora
+con su permiso persistente autorizado. Falta autorizacion de Publish/API y
+ejecucion integral del candidato revisado 42721985281; no reconstruirlo.
+
 Revision actual verificada: el responsable publico la
 [decision 6755129089](https://github.com/leoperetti/authcraft-api/issues/11#issuecomment-6755129089)
 para el candidato 42721985281. El parser exacto aprobo autor, ultima decision,

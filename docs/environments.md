@@ -1275,6 +1275,21 @@ Publish remoto; Production permanece bloqueado.
 
 ### Ventana de permisos automatizada: preparacion local
 
+Ensayo remoto completado:
+[run 42736112124](https://github.com/leoperetti/authcraft-api/actions/runs/42736112124),
+commit b0ff3bfd9e562649e03ba2297a8c3ef08101d66e, login OIDC de
+assigner_revoker, Grant y Revoke inmediato aprobados. El segundo Revoke
+idempotente verifico independientemente baseline desde conexion nueva.
+Artefacto staging-permission-manager descargado y validado para run/commit:
+login_result/rehearsal_result/cleanup_result=success,
+revocation_verified=true, published=false, 2026-11-10T01:29:55Z.
+El publicador queda sin db_owner; la gestora conserva su db_owner autorizado.
+Production disabled_manually confirmado. No hubo Publish, API ni login de negocio.
+El paso de gestion de permisos ya tiene evidencia OIDC real, no solo
+impersonacion administrativa. No acredita aun una publicacion DacFx real ni
+la ruta de fallo/cancelacion remota; perdida total del runner requiere operador.
+El candidato revisado sigue siendo 42721985281, sin reconstruccion.
+
 Autorizacion posterior: preparar, commit/push y ejecutar exclusivamente el
 ensayo OIDC grant/revoke sin despliegue. Workflow manual
 verify_staging_permission_manager.yml, solo main, serializado con la publicacion

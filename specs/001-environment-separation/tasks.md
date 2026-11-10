@@ -419,6 +419,12 @@ No agregar tablas para el modelo operativo de publicaciones.
   Azure sin ejecucion autorizada. 78 pruebas locales pasan, cero omisiones.
   Falta verificar OIDC/permisos SQL reales de la gestora y ensayar el flujo en
   Actions; no hay watchdog externo. T037/T038 siguen pendientes; no se publico.
+  Ensayo remoto posterior autorizado: run 42736112124, commit b0ff3bfd9e562649e03ba2297a8c3ef08101d66e,
+  login OIDC gestora y grant/revoke reales success. Cleanup idempotente verifica
+  baseline desde conexion nueva; artefacto descargado y validado:
+  revocation_verified=true, published=false. El publicador queda sin db_owner.
+  Esta comprobacion de gestora ya no esta pendiente; T037 conserva pendiente
+  Publish DacFx real y T038 flujo integral/fallos. Production disabled_manually.
 
   Avance 2026-11-09: 130 pruebas focalizadas pasaron y una prueba SQL local se
   omitio por falta de `AUTHCRAFT_TEST_SQL_CONNECTION`; la prueba de review DacFx
