@@ -34,12 +34,14 @@ public sealed class DatabaseDeploymentReviewTests
         Assert.Contains("/Action:Publish", sandbox.Actions);
     }
 
-    [Fact]
-    public void Publish_RevalidatesExactAuthenticatedReviewAndPlanBeforePublishing()
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("json-array-comments")]
+    public void Publish_RevalidatesExactAuthenticatedReviewAndPlanBeforePublishing(string scenario)
     {
         using var sandbox = new ReviewSandbox();
 
-        var result = sandbox.Run("approved");
+        var result = sandbox.Run(scenario);
 
         Assert.True(result.ExitCode == 0, result.Error);
         using var published = JsonDocument.Parse(result.Output);
@@ -407,7 +409,16 @@ public sealed class DatabaseDeploymentReviewTests
                         ($env:REVIEW_TEST_SCENARIO -eq 'dacpac-changed-on-recheck' -and $script:commentsRead -gt 1)) {
                         Add-Content -LiteralPath '{{dacpacPath}}' -Value 'changed'
                     }
-                    return @(@{ id = 42; user = @{ login = $author }; body = $body; created_at = '2026-11-06T15:00:00Z' })
+                    $currentReview = [pscustomobject]@{ id = 42; user = @{ login = $author }; body = $body; created_at = '2026-11-06T15:00:00Z' }
+                    if ($env:REVIEW_TEST_SCENARIO -eq 'json-array-comments') {
+                        $history = @(
+                            [pscustomobject]@{ id = 41; user = @{ login = $author }; body = 'deployment_review=rejected'; created_at = '2026-11-05T15:00:00Z' },
+                            $currentReview
+                        )
+                        Write-Output -NoEnumerate $history
+                        return
+                    }
+                    return @($currentReview)
                 }
                 $parameters = @{
                     Mode = 'Publish'

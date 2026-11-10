@@ -1275,6 +1275,18 @@ Publish remoto; Production permanece bloqueado.
 
 ### Ventana de permisos automatizada: preparacion local
 
+Publicacion explicitamente autorizada del candidato 42721985281 con revision
+6755129089: primer intento run 42736407449 bloqueado antes de invocar Publish
+por lector de comentarios JSON anidados. Report/SQL/DACPAC coinciden con revision.
+La prueba LocalDB real paso; grant y cleanup/revocacion terminaron success.
+Intento result=blocked, schema_result=blocked, API/smoke not_executed.
+No se ejecutaron escrituras de esquema/postdeploy en este intento.
+Correccion del lector conserva todos los campos y gates: asignar primero la
+respuesta Invoke-RestMethod y normalizar despues. Regresion reproduce arreglo
+JSON no enumerado con decision vieja rechazada y nueva aprobada.
+134 pruebas locales aprobadas, ninguna omitida; candidato/paquetes sin cambios.
+El reintento conserva el alcance autorizado, sin Production ni datos nuevos.
+
 Ensayo remoto completado:
 [run 42736112124](https://github.com/leoperetti/authcraft-api/actions/runs/42736112124),
 commit b0ff3bfd9e562649e03ba2297a8c3ef08101d66e, login OIDC de

@@ -199,7 +199,8 @@ function Invoke-SqlPackage {
 function Get-AuthenticatedReview {
     try {
         $issue = Invoke-RestMethod -Uri $issueUri -Headers $headers -Method Get -TimeoutSec 30
-        $comments = @(Invoke-RestMethod -Uri "$issueUri/comments?per_page=100" -Headers $headers -Method Get -TimeoutSec 30)
+        $comments = Invoke-RestMethod -Uri "$issueUri/comments?per_page=100" -Headers $headers -Method Get -TimeoutSec 30
+        $comments = @($comments)
     }
     catch {
         throw 'Authenticated deployment review could not be retrieved from GitHub.'
