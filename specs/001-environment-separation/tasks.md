@@ -484,6 +484,16 @@ No agregar tablas para el modelo operativo de publicaciones.
   valores exactos. Gate de revision propia satisfecho, no autorizacion operacional.
   T037/T039/T040 siguen parciales; no hubo permisos, conexiones SQL ni Publish.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
+  Ejecucion explicitamente autorizada: run 42736407449 bloqueado antes de Publish
+  por normalizacion de comentarios JSON; corregido con 134 regresiones aprobadas.
+  Reintento 42737737446 publico SQL/API del candidato 42721985281 y revoco
+  db_owner correctamente. Smoke fallo antes de login: salud healthy/version=local.
+  Inspeccion independiente confirma siete constraints confiables, tres semillas
+  esperadas y publicador sin db_owner. No rollback ni promocion; T040 sigue parcial.
+  Correccion local del SHA de compilacion verificada mediante tres pruebas HTTP
+  con entorno Actions y rechazo del build local en CI. Requiere candidato/revision
+  nuevos y baseline actual revisado; no reutilizar paquetes ni bootstrap unknown
+  como si no se hubiese modificado el destino.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
 **Avance local 2026-11-09 (T033)**: el preflight T032 ya fue verificado con OIDC

@@ -6,12 +6,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>authcraft_api</RootNamespace>
     <UserSecretsId>11692428-d5ab-458d-af66-82aa2794c394</UserSecretsId>
+    <CommitSha Condition="'$(CommitSha)' == '' and '$(GITHUB_ACTIONS)' == 'true'">$(GITHUB_SHA)</CommitSha>
     <CommitSha Condition="'$(CommitSha)' == ''">local</CommitSha>
   </PropertyGroup>
 
   <ItemGroup>
     <AssemblyMetadata Include="CommitSha" Value="$(CommitSha)" />
   </ItemGroup>
+
+  <Target Name="ValidateActionsCommitSha" BeforeTargets="CoreCompile" Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(CommitSha)', '^[a-f0-9]{40}$')) or '$(CommitSha)' != '$(GITHUB_SHA)'"
+           Text="GitHub Actions builds must embed the exact GITHUB_SHA in CommitSha." />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.5.2" />

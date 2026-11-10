@@ -5,6 +5,13 @@ Development fue validado en LocalDB; no se conectó Azure SQL durante esa valida
 
 ## Prerrequisitos y límites
 
+Estado posterior al despliegue autorizado: run 42737737446 publico SQL y API del
+candidato 42721985281, revoco permisos, pero fallo smoke por version=local.
+Salud live/ready healthy no acredita el SHA esperado; login no se ejecuto.
+No promover ni repetir bootstrap unknown: SQL/API ya cambiaron. La correccion
+local de compilacion requiere candidato y revision nuevos, con baseline actual
+inspeccionado. Ver evidencia en docs/environments.md.
+
 La reanudacion ahora incluye localmente gestion temporal mediante
 `assigner_revoker` (client ID c376b9f5-2b0b-406f-8579-ef8787001115).
 Antes de ejecutarla verificar federacion OIDC y usuario/permisos SQL de la gestora:

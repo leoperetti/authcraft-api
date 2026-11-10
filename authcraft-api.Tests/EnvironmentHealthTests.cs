@@ -19,6 +19,8 @@ public sealed class EnvironmentHealthTests
         Assert.Equal("healthy", body.RootElement.GetProperty("status").GetString());
         Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("version").GetString()));
         Assert.NotEqual("untrusted-config-version", body.RootElement.GetProperty("version").GetString());
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+            Assert.Equal(Environment.GetEnvironmentVariable("GITHUB_SHA"), body.RootElement.GetProperty("version").GetString());
         Assert.Equal(0, factory.ReadinessCheck.Calls);
     }
 

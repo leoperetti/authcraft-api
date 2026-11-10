@@ -1275,6 +1275,39 @@ Publish remoto; Production permanece bloqueado.
 
 ### Ventana de permisos automatizada: preparacion local
 
+Preparacion de recuperacion autorizada: commit/push del fix de version y nuevo
+packaging/evaluacion de solo lectura, sin otro despliegue. La comprobacion actual
+confirma live/ready healthy/version=local y evidencia del intento previo con
+schema/application succeeded, smoke failed y revocacion succeeded. No hay
+baseline funcional validado. El preflight actual solo reconoce deploy-staging
+en el workflow antiguo y no contempla este estado recuperable: se deja bloqueado,
+sin declarar bootstrap unknown ni successful deployment artificialmente.
+La nueva evaluacion puede generar paquetes/report/SQL, pero no acredita el gate
+de baseline; requiere resolver recuperacion explicita antes de nueva publicacion.
+Tres pruebas HTTP con SHA real y entorno Actions pasan antes del push.
+
+Reintento autorizado
+[42737737446](https://github.com/leoperetti/authcraft-api/actions/runs/42737737446):
+publico DACPAC y ZIP originales del candidato 42721985281 con exito.
+Grant/revocacion verificados; API se desplego solo despues de retirar db_owner.
+El smoke fallo antes de login porque /health/live y /health/ready responden
+healthy pero version=local, no el SHA esperado. Intento failed, etapa smoke;
+no declarar staging_validated ni promover. No se revirtio SQL/API.
+Una inspeccion SQL independiente confirma publicador db_owner=0, gestora=1,
+las seis checks y FK revisadas habilitadas/confiables y las tres semillas
+google/apple/github presentes. No se infiere atomicidad global de estos resultados.
+
+Causa: el proyecto usa CommitSha=local por defecto y el pipeline no le pasaba
+GITHUB_SHA; el manifiesto correcto no demuestra version interna del ensamblado.
+Correccion local: derivar CommitSha de GITHUB_SHA en Actions y rechazar un valor
+ausente/malformado/distinto. La prueba HTTP de salud exige igualdad exacta en CI.
+Tres pruebas salud pasan compilando realmente con entorno Actions y SHA; build
+con CommitSha=local es rechazado como se esperaba. No se altero el paquete
+revisado ni se autorizo reconstruirlo bajo el mismo run. Se necesita candidato
+nuevo, evaluacion del baseline actual (ya modificado) y revision propia antes de
+otro despliegue. No repetir bootstrap unknown por asumir que el smoke fallido
+significa que nada se publico. Pendiente acordar baseline de recuperacion exacto.
+
 Publicacion explicitamente autorizada del candidato 42721985281 con revision
 6755129089: primer intento run 42736407449 bloqueado antes de invocar Publish
 por lector de comentarios JSON anidados. Report/SQL/DACPAC coinciden con revision.
