@@ -31,6 +31,12 @@ public sealed class StagingRecoveryCheckpointTests
         Assert.Contains("recovery_deployment_run_id:", packagingWorkflow, StringComparison.Ordinal);
         Assert.Contains("preflight.state -cne $expectedPreflightState", packagingWorkflow, StringComparison.Ordinal);
         Assert.Contains("recovery_review_required", packagingWorkflow, StringComparison.Ordinal);
+        var preflightJobIndex = packagingWorkflow.IndexOf("  preflight-staging:", StringComparison.Ordinal);
+        Assert.True(preflightJobIndex >= 0);
+        var preflightCheckoutIndex = packagingWorkflow.IndexOf("- uses: actions/checkout@v4", preflightJobIndex, StringComparison.Ordinal);
+        var preflightArtifactDownloadIndex = packagingWorkflow.IndexOf("- name: Download this run's release artifacts", preflightCheckoutIndex, StringComparison.Ordinal);
+        Assert.True(preflightCheckoutIndex >= 0 && preflightArtifactDownloadIndex > preflightCheckoutIndex);
+        Assert.Contains("fetch-depth: 0", packagingWorkflow[preflightCheckoutIndex..preflightArtifactDownloadIndex], StringComparison.Ordinal);
         Assert.Contains("initial bootstrap cannot replace its recovery checkpoint", preflight, StringComparison.Ordinal);
         Assert.DoesNotContain("RecoveryDeploymentRunId", deploymentWorkflow, StringComparison.Ordinal);
         Assert.Contains("preflight.state -cne 'ready_for_review'", deploymentWorkflow, StringComparison.Ordinal);

@@ -547,6 +547,12 @@ Entra reales. No completar estas tareas solo por pasar las pruebas simuladas.
   T043 sigue pendiente: no existe ni se habilita un controlador de promocion/
   recuperacion Production que permita acreditar sus escenarios de extremo a
   extremo; Production permanece bloqueado.
+  Validacion review-only remota: el run 42841877647 construyo los cinco
+  artefactos y completo la evaluacion SQL de solo lectura, pero el preflight
+  rechazo el candidato porque el checkout shallow no contenia el commit del
+  checkpoint para `git merge-base`. No ejecuto Publish ni despliegue API.
+  Correccion local: `fetch-depth: 0` solo en el job preflight y regresion
+  estatica; se repetira empaquetado/evaluacion sin habilitar despliegue.
 
 ### Implementation for User Story 4
 
