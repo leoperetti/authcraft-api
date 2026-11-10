@@ -1815,3 +1815,97 @@ validacion integral; la concesion no se dejo activa para un futuro dispatch.
 Antes de publicar debe coordinarse otra autorizacion y una ventana acotada con
 revocacion/verificacion incluso ante fallo, ademas de los restantes gates de
 workflow, smoke y datos sinteticos. Este ensayo no autoriza esa publicacion.
+
+### Preflight review-only de recuperacion Staging: run 42843791046
+
+El commit `f908189460a900ead556216b1822a46eaa669483` completo con exito
+`validate`, `verify-staging-publisher` y `preflight-staging` en el run
+[42843791046](https://github.com/leoperetti/authcraft-api/actions/runs/42843791046).
+Se corrigio el checkout superficial del preflight; el run ahora puede validar la
+relacion de commits y el checkpoint del despliegue parcial 42737737446. La
+evaluacion SQL fue review-only: no ejecuto Publish, post-deploy, despliegue de API,
+smoke ni escrituras. La ejecucion no autoriza despliegue y no acredita que el
+estado vivo de Staging haya sido conciliado con el checkpoint. Los artefactos se
+retienen hasta 2026-12-10.
+
+Hashes SHA-256 del candidato exacto:
+
+- DACPAC: `a9d445a6a33cdce95a50d304b661f27b8241b72b8c1d7acb250c374af02b4759`
+- API ZIP: `4e06f18f6a48052250c2b7979fb427008be468b81086dcbf2aa30d684e519215`
+- DeployReport: `d009c7d45f8df32b3dfc4c4d87fed790473c1c07b9ecb08268b540ffc9486bdf`
+- SQL: `b9d82385331c37582888652446e139f062897f1fb21253e02eb5922c9dda1476`
+
+El DeployReport no contiene Alerts. El script contiene dos `DROP CONSTRAINT`
+para checks existentes de `dbo.invitations`, dos alteraciones `WITH NOCHECK`,
+tres `INSERT` condicionales de proveedores (`google`, `apple`, `github`) y no
+contiene `DELETE` ni `TRUNCATE`. Por tanto, aunque las nuevas escrituras siguen
+sujetas a las restricciones, el `ADD` inicial con `WITH NOCHECK` no valida las
+filas existentes; el post-deploy las revalida despues con `WITH CHECK CHECK` y
+falla si alguna queda no confiable. El plan aun requiere revisar la recreacion de
+las restricciones y sus efectos antes de cualquier Publish.
+
+El artefacto `evaluation-toolchain.json` registra SqlPackage 170.4.53.0,
+SHA-256 `907454a8848e9617666ac03db8c18e82a15e0435aaa223d8d132f830a7841d26`,
+`include_transactional_scripts=true` y `script_database_options=false`. El SQL
+contiene dos `WAITFOR DELAY '00:00.010'`; el ejecutable coincide con el de las
+reproducciones DacFx documentadas arriba, por lo que no son evidencia de edicion
+manual. Su finalidad interna no se infiere.
+
+El script exacto elimina y recrea `CK_invitations_registered_dni` y
+`CK_invitations_student_dni` con `WITH NOCHECK`, pero luego ejecuta
+`WITH CHECK CHECK CONSTRAINT` para esas dos y las demas restricciones, y falla si
+alguna queda deshabilitada o no confiable. Esto valida el estado final si el
+post-deploy termina, aunque mantiene una recreacion innecesaria de dos checks que
+ya estaban confiables en Staging. En la fuente usan `IN (7,8)` y el catalogo de
+Staging expresa la condicion equivalente como disyuncion; se recomienda alinear
+la expresion del modelo para evitar el `DROP`/`CREATE`, regenerar y volver a
+revisar hashes antes de considerar Publish.
+
+Conciliacion operativa de solo lectura, 2026-11-10, autorizada por el usuario:
+
+- Desde el hostname devuelto por ARM,
+  `authcraft-api-staging-agcwhagyend9gkcj.westus3-01.azurewebsites.net`,
+  `/health/live` y `/health/ready` respondieron `healthy`, pero ambos reportaron
+  `version=local`. No se ejecuto smoke autenticado; el API candidato no esta
+  acreditado como desplegado.
+- En `authcraft-db-staging` se consultaron solo metadatos de esquema y catalogo;
+  no se leyeron filas de negocio ni se escribio. Estan presentes las columnas de
+  invitacion del candidato, incluyendo `row_version` (`timestamp`); los checks
+  revisados y las dos FK de invitaciones estan habilitados y confiables, al igual
+  que los checks de status y JSON de memberships/tenants.
+- Estan presentes las semillas `apple`, `github` y `google`. El publicador
+  `authcraft-staging-schema-publisher` no es miembro de `db_owner`.
+
+La revision/autorizacion de otro run no se transfiere a este candidato. Las
+lecturas confirman el estado parcial de SQL y que la API sigue en `local`, pero
+no convierten el checkpoint en baseline exitoso ni autorizan el despliegue. No
+se despacho el workflow de despliegue, no se ejecuto Publish y T040 sigue
+pendiente de la revision exacta, el plan SQL final y los gates operacionales.
+
+### Alineacion local de checks de invitacion: 2026-11-10
+
+Para evitar recrear checks semantica y serialmente equivalentes, las expresiones
+de `CK_invitations_registered_dni` y `CK_invitations_student_dni` en el proyecto
+SQL y el fixture SQL de pruebas se alinearon con el modelo extraido de Staging.
+El SQL project se reconstruyo con SSDT sin advertencias ni errores; la seleccion
+`LocalEnvironmentSqlTests|DatabaseDeploymentReviewTests`, ejecutada con la
+conexion LocalDB configurada, aprobo 57/57 pruebas sin omisiones. Incluyo
+publicacion del DACPAC en una base local descartable y verificacion del estado
+de constraints; no se modifico la base de desarrollo existente.
+
+Una evaluacion local `SqlPackage /Action:Script` contra Staging, con el DACPAC
+reconstruido y sin ejecutar el script, no produjo operaciones DacFx,
+`DROP CONSTRAINT`, recreaciones de esos checks ni `WAITFOR`; conserva sus dos
+validaciones `WITH CHECK CHECK`. Hashes de esa prueba local, no de un release
+publicado:
+
+- DACPAC: `f3689ec0c8ba942b8e89e5ed98d6492e4a163ecdca88920b3e956193e99044ad`
+- DeployReport: `ed7fb903c9a72acfc69017a4f9e9ec6c61623eceedaef928ca38c68c7b315f37`
+- SQL: `515e097d50b14306081b1b0fcd3ed53ecbb87ca488dbc8bd61790707d2c52b6d`
+
+La prueba uso un manifiesto sintetico temporal y no genero artefactos de Actions.
+Los cambios permanecen locales; no se hizo commit/push ni se despacho un nuevo
+run. El run 42843791046 y sus hashes describen el plan anterior y no autorizan
+ni representan este modelo corregido. Se requiere publicar el cambio, generar
+un candidato nuevo review-only y revisar sus hashes exactos antes de cualquier
+Publish; no se ejecuto Publish ni se escribio en SQL durante esta evaluacion.

@@ -494,6 +494,12 @@ No agregar tablas para el modelo operativo de publicaciones.
   con entorno Actions y rechazo del build local en CI. Requiere candidato/revision
   nuevos y baseline actual revisado; no reutilizar paquetes ni bootstrap unknown
   como si no se hubiese modificado el destino.
+  Conciliacion autorizada 2026-11-10: API Staging healthy pero version=local;
+  SQL conserva columnas/semillas esperadas y constraints/FK confiables. La expresion
+  local de los dos checks DNI se alineo; SSDT compilo sin advertencias y 57/57
+  pruebas con LocalDB pasaron. El Script read-only contra Staging no reporta
+  operaciones ni DROP, sin publicar. Requiere nuevo run/revision exacta; T040
+  sigue pendiente.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
 **Avance local 2026-11-09 (T033)**: el preflight T032 ya fue verificado con OIDC
@@ -703,8 +709,16 @@ parcial/desconocido y nunca continúan API/promocion ni disparan rollback destru
 - [X] T073 [US3] Agregar validacion autenticada del checkpoint de publicacion parcial en `scripts\Get-StagingRecoveryCheckpoint.ps1`, integrarla en `scripts\Test-ReleasePreflight.ps1` y exponerla solo al workflow review-only de empaquetado; verificar que nunca convierta el estado parcial en baseline elegible ni autorice despliegue/promocion. Documentar los limites en `docs\deployment-recovery.md` y cubrir evidencia valida, procedencia, artefactos y rechazos con pruebas simuladas.
   Validacion local: 53 pruebas de `DeploymentPipelineTests` y
   `StagingRecoveryCheckpointTests` aprobadas, sin cambios remotos ni Publish.
-  T035/T040 y la conciliacion del estado vivo siguen pendientes; T073 no los
-  completa ni habilita una publicacion.
+  Verificacion remota review-only: run 42843791046 / commit
+  f908189460a900ead556216b1822a46eaa669483 completo validate,
+  verify-staging-publisher y preflight-staging; la evaluacion SQL no publico.
+  Los hashes exactos y los hallazgos del plan quedaron registrados en
+  `docs\environments.md`. La lectura autorizada confirma esquema/constraints/
+  semillas SQL y salud `healthy` con API `version=local`; no se leyeron filas de
+  negocio. La API candidata no esta acreditada y T040 sigue pendiente; T073 no
+  autoriza un despliegue.
+  T035/T040 y la conciliacion funcional/versionada del estado vivo siguen
+  pendientes; T073 no los completa ni habilita una publicacion.
 
 **MVP del incremento**: T062–T064, evidencia local del alcance real. No avanzar a
 publicacion si falla ese gate, aunque la opcion este activada. US1 no requiere

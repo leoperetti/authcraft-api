@@ -71,9 +71,9 @@ public sealed class InvitationSignupSqlServerFixture : IAsyncLifetime, IAsyncDis
             IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_invitations_student_profile')
                 ALTER TABLE dbo.invitations ADD CONSTRAINT CK_invitations_student_profile CHECK (purpose IS NULL OR (student_id > 0 AND full_name IS NOT NULL AND LEN(full_name) > 0 AND ((first_name IS NULL AND last_name IS NULL) OR (first_name IS NOT NULL AND last_name IS NOT NULL))));
             IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_invitations_student_dni')
-                ALTER TABLE dbo.invitations ADD CONSTRAINT CK_invitations_student_dni CHECK (dni IS NULL OR (LEN(REPLACE(REPLACE(dni, N'.', N''), N' ', N'')) IN (7,8) AND dni NOT LIKE N'%[^0-9. ]%'));
+                ALTER TABLE dbo.invitations ADD CONSTRAINT CK_invitations_student_dni CHECK (dni IS NULL OR (len(replace(replace(dni,N'.',N''),N' ',N''))=(8) OR len(replace(replace(dni,N'.',N''),N' ',N''))=(7)) AND NOT [dni] like N'%[^0-9. ]%');
             IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_invitations_registered_dni')
-                ALTER TABLE dbo.invitations ADD CONSTRAINT CK_invitations_registered_dni CHECK (registered_dni IS NULL OR (LEN(REPLACE(REPLACE(registered_dni, N'.', N''), N' ', N'')) IN (7,8) AND registered_dni NOT LIKE N'%[^0-9. ]%'));
+                ALTER TABLE dbo.invitations ADD CONSTRAINT CK_invitations_registered_dni CHECK (registered_dni IS NULL OR (len(replace(replace(registered_dni,N'.',N''),N' ',N''))=(8) OR len(replace(replace(registered_dni,N'.',N''),N' ',N''))=(7)) AND NOT [registered_dni] like N'%[^0-9. ]%');
             """);
         await db.Database.OpenConnectionAsync();
     }
