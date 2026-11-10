@@ -21,6 +21,11 @@ on:
         type: string
         required: false
         default: ''
+      recovery_deployment_run_id:
+        description: Failed partial Staging deployment run to record as recovery evidence only; never authorizes Publish
+        type: string
+        required: false
+        default: ''
       allow_initial_staging_bootstrap:
         description: Record an unknown baseline only when Actions has no successful Staging deployment
         type: boolean
@@ -309,6 +314,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LAST_SUCCESSFUL_STAGING_COMMIT_SHA: ${{ inputs.last_successful_staging_commit_sha }}
+          RECOVERY_DEPLOYMENT_RUN_ID: ${{ inputs.recovery_deployment_run_id }}
           ALLOW_INITIAL_STAGING_BOOTSTRAP: ${{ inputs.allow_initial_staging_bootstrap }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -322,7 +328,14 @@ jobs:
             GitHubRef = $env:GITHUB_REF
             TargetEnvironment = 'staging'
           }
-          if ($env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
+          if (-not [string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+            if (-not [string]::IsNullOrWhiteSpace($env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA) -or
+                $env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
+              throw 'Partial Staging recovery evidence cannot be combined with a known baseline or bootstrap.'
+            }
+            $parameters.LastSuccessfulCommitSha = 'unknown'
+            $parameters.RecoveryDeploymentRunId = $env:RECOVERY_DEPLOYMENT_RUN_ID
+          } elseif ($env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
             if (-not [string]::IsNullOrWhiteSpace($env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA) -and
                 $env:LAST_SUCCESSFUL_STAGING_COMMIT_SHA -cne 'unknown') {
               throw 'Initial bootstrap cannot also specify a known previous commit.'
@@ -335,9 +348,20 @@ jobs:
           $preflightOutput = & .\scripts\Test-ReleasePreflight.ps1 @parameters
           if ($LASTEXITCODE -ne 0) { throw 'Staging preflight failed; no deployment was attempted.' }
           $preflight = ($preflightOutput -join "`n") | ConvertFrom-Json
-          if ($preflight.state -cne 'ready_for_review' -or
+          $expectedPreflightState = if ([string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+            'ready_for_review'
+          } else {
+            'recovery_review_required'
+          }
+          if ($preflight.state -cne $expectedPreflightState -or
               $preflight.target -cne 'staging' -or
               $preflight.deployment_authorized -ne $false) {
             throw 'Staging preflight did not return the expected review-only state.'
+          }
+          if ($expectedPreflightState -eq 'recovery_review_required' -and
+              ($preflight.baseline_state -cne 'partial_recovery' -or
+                  $preflight.live_state_reconciliation_required -ne $true -or
+                  $preflight.bootstrap_review_required -ne $false)) {
+            throw 'Partial recovery evidence did not remain explicitly non-authorizing.'
           }
           $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY

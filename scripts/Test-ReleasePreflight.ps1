@@ -16,6 +16,7 @@ param(
     [ValidateSet('staging', 'production')]
     [string]$TargetEnvironment,
     [string]$LastSuccessfulCommitSha,
+    [string]$RecoveryDeploymentRunId,
     [switch]$AllowInitialStagingBootstrap,
     [string]$RepositoryPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 )
@@ -45,10 +46,13 @@ try {
     if ($GitHubRef -cne 'refs/heads/main') {
         Stop-Preflight 'Release publication requires refs/heads/main.'
     }
+    $hasRecoveryCheckpoint = -not [string]::IsNullOrWhiteSpace($RecoveryDeploymentRunId)
     $hasKnownBaseline = $LastSuccessfulCommitSha -match '^[A-Fa-f0-9]{40}$'
     if ($ExpectedCommitSha -notmatch '^[A-Fa-f0-9]{40}$' -or
         $ExpectedRunId -notmatch '^[1-9][0-9]*$' -or
-        (-not $hasKnownBaseline -and
+        ($hasRecoveryCheckpoint -and
+            ($RecoveryDeploymentRunId -notmatch '^[1-9][0-9]*$' -or $hasKnownBaseline -or $AllowInitialStagingBootstrap)) -or
+        (-not $hasRecoveryCheckpoint -and -not $hasKnownBaseline -and
             ($LastSuccessfulCommitSha -cne 'unknown' -or -not $AllowInitialStagingBootstrap))) {
         Stop-Preflight 'Commit or run metadata is missing or malformed.'
     }
@@ -88,16 +92,51 @@ try {
         }
     }
 
+    $evidenceDirectory = Join-Path ([IO.Path]::GetTempPath()) "authcraft-preflight-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
     $repositoryRoot = (Resolve-Path -LiteralPath $RepositoryPath).Path
     $checkedOutCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or
         -not [string]::Equals($checkedOutCommit, $ExpectedCommitSha, [StringComparison]::OrdinalIgnoreCase)) {
         Stop-Preflight 'Checked-out source does not match the release commit.'
     }
-    if ($hasKnownBaseline) {
-        & git -C $repositoryRoot merge-base --is-ancestor $LastSuccessfulCommitSha $ExpectedCommitSha *> $null
+    $baselineCommitSha = if ($hasKnownBaseline) { $LastSuccessfulCommitSha } else { $null }
+    if ($hasRecoveryCheckpoint) {
+        $checkpointDirectory = Join-Path $evidenceDirectory 'recovery-checkpoint'
+        $checkpointOutput = & (Join-Path $PSScriptRoot 'Get-StagingRecoveryCheckpoint.ps1') `
+            -DeploymentRunId $RecoveryDeploymentRunId `
+            -OutputDirectory $checkpointDirectory
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($checkpointOutput -join "`n"))) {
+            Stop-Preflight 'Authenticated partial Staging recovery evidence is unavailable or invalid.'
+        }
+        try {
+            $recoveryCheckpoint = ($checkpointOutput -join "`n" | ConvertFrom-Json -ErrorAction Stop)
+        } catch {
+            Stop-Preflight 'Authenticated partial Staging recovery evidence is malformed.'
+        }
+        if ($recoveryCheckpoint.baseline_state -cne 'partial_recovery' -or
+            $recoveryCheckpoint.deployment_run_id -cne $RecoveryDeploymentRunId -or
+            $recoveryCheckpoint.live_state -cne 'not_reconciled' -or
+            $recoveryCheckpoint.baseline_eligible -ne $false -or
+            $recoveryCheckpoint.deployment_authorized -ne $false -or
+            $recoveryCheckpoint.promotion_authorized -ne $false -or
+            $recoveryCheckpoint.baseline_commit_sha -notmatch '^[a-f0-9]{40}$') {
+            Stop-Preflight 'Recovery checkpoint does not represent a non-authorizing partial deployment.'
+        }
+        $baselineCommitSha = $recoveryCheckpoint.baseline_commit_sha
+    } elseif ($hasKnownBaseline) {
+        $baselineCommitSha = $LastSuccessfulCommitSha
+    }
+    if ($baselineCommitSha) {
+        if ([string]::Equals(
+                $ExpectedCommitSha,
+                $baselineCommitSha,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Preflight 'Candidate release is not newer than the recorded Staging state.'
+        }
+        & git -C $repositoryRoot merge-base --is-ancestor $baselineCommitSha $ExpectedCommitSha *> $null
         if ($LASTEXITCODE -ne 0) {
-            Stop-Preflight 'Candidate release is older than or diverged from the last successful release.'
+            Stop-Preflight 'Candidate release is older than or diverged from the recorded Staging state.'
         }
     }
 
@@ -129,8 +168,6 @@ try {
     if ($artifactMetadata.total_count -ne @($artifactMetadata.artifacts).Count) {
         Stop-Preflight 'Actions artifact metadata is truncated; provenance cannot be verified.'
     }
-    $evidenceDirectory = Join-Path ([IO.Path]::GetTempPath()) "authcraft-preflight-$([Guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
     foreach ($artifact in @(
             @{ Name = 'api'; LocalPath = $ApiArtifactPath },
             @{ Name = 'dacpac'; LocalPath = $DatabaseArtifactPath },
@@ -155,57 +192,67 @@ try {
         }
     }
 
-    $history = Get-ActionsMetadata 'actions/workflows/main_authcraft-api-staging.yml/runs?branch=main&status=success&per_page=100'
-    if ($history.total_count -ne @($history.workflow_runs).Count) {
-        Stop-Preflight 'Actions staging history is truncated; the initial baseline cannot be verified.'
-    }
     $lastStagingRun = $null
-    $lastStagingRunCreatedAt = [DateTimeOffset]::MinValue
-    foreach ($previousRun in $history.workflow_runs) {
-        if ($previousRun.repository.full_name -cne 'leoperetti/authcraft-api' -or
-            $previousRun.head_repository.full_name -cne 'leoperetti/authcraft-api' -or
-            $previousRun.path -cne '.github/workflows/main_authcraft-api-staging.yml' -or
-            $previousRun.head_branch -cne 'main' -or
-            $previousRun.event -notin @('push', 'workflow_dispatch') -or
-            $previousRun.status -cne 'completed' -or $previousRun.conclusion -cne 'success' -or
-            [string]$previousRun.id -notmatch '^[1-9][0-9]*$') {
-            Stop-Preflight 'Actions release history contains unverifiable metadata.'
+    if (-not $hasRecoveryCheckpoint) {
+        $history = Get-ActionsMetadata 'actions/workflows/main_authcraft-api-staging.yml/runs?branch=main&status=success&per_page=100'
+        if ($history.total_count -ne @($history.workflow_runs).Count) {
+            Stop-Preflight 'Actions staging history is truncated; the initial baseline cannot be verified.'
         }
-        $previousJobs = Get-ActionsMetadata "actions/runs/$($previousRun.id)/jobs?per_page=100"
-        if ($previousJobs.total_count -ne @($previousJobs.jobs).Count) {
-            Stop-Preflight 'Actions job history is truncated; successful staging deployment cannot be verified.'
-        }
-        $stagingJobs = @($previousJobs.jobs | Where-Object {
-            $_.name -ceq 'deploy-staging' -and $_.status -ceq 'completed' -and $_.conclusion -ceq 'success'
-        })
-        if ($stagingJobs.Count -eq 1) {
-            $previousRunCreatedAt = [DateTimeOffset]::MinValue
-            if (-not [DateTimeOffset]::TryParse(
-                    [string]$previousRun.created_at,
-                    [Globalization.CultureInfo]::InvariantCulture,
-                    [Globalization.DateTimeStyles]::AssumeUniversal,
-                    [ref]$previousRunCreatedAt)) {
-                Stop-Preflight 'Actions staging deployment timestamp is missing or malformed.'
+        $lastStagingRunCreatedAt = [DateTimeOffset]::MinValue
+        foreach ($previousRun in $history.workflow_runs) {
+            if ($previousRun.repository.full_name -cne 'leoperetti/authcraft-api' -or
+                $previousRun.head_repository.full_name -cne 'leoperetti/authcraft-api' -or
+                $previousRun.path -cne '.github/workflows/main_authcraft-api-staging.yml' -or
+                $previousRun.head_branch -cne 'main' -or
+                $previousRun.event -notin @('push', 'workflow_dispatch') -or
+                $previousRun.status -cne 'completed' -or $previousRun.conclusion -cne 'success' -or
+                [string]$previousRun.id -notmatch '^[1-9][0-9]*$') {
+                Stop-Preflight 'Actions release history contains unverifiable metadata.'
             }
+            $previousJobs = Get-ActionsMetadata "actions/runs/$($previousRun.id)/jobs?per_page=100"
+            if ($previousJobs.total_count -ne @($previousJobs.jobs).Count) {
+                Stop-Preflight 'Actions job history is truncated; successful staging deployment cannot be verified.'
+            }
+            $stagingJobs = @($previousJobs.jobs | Where-Object {
+                $_.name -ceq 'deploy-staging' -and $_.status -ceq 'completed' -and $_.conclusion -ceq 'success'
+            })
+            if ($stagingJobs.Count -eq 1) {
+                $previousRunCreatedAt = [DateTimeOffset]::MinValue
+                if (-not [DateTimeOffset]::TryParse(
+                        [string]$previousRun.created_at,
+                        [Globalization.CultureInfo]::InvariantCulture,
+                        [Globalization.DateTimeStyles]::AssumeUniversal,
+                        [ref]$previousRunCreatedAt)) {
+                    Stop-Preflight 'Actions staging deployment timestamp is missing or malformed.'
+                }
+                if ($null -eq $lastStagingRun -or
+                    $previousRunCreatedAt -gt $lastStagingRunCreatedAt -or
+                    ($previousRunCreatedAt -eq $lastStagingRunCreatedAt -and
+                        [long]$previousRun.id -gt [long]$lastStagingRun.id)) {
+                    $lastStagingRun = $previousRun
+                    $lastStagingRunCreatedAt = $previousRunCreatedAt
+                }
+            }
+            if ($stagingJobs.Count -gt 1) {
+                Stop-Preflight 'Actions history contains ambiguous successful staging deployment jobs.'
+            }
+        }
+        if ($hasKnownBaseline) {
             if ($null -eq $lastStagingRun -or
-                $previousRunCreatedAt -gt $lastStagingRunCreatedAt -or
-                ($previousRunCreatedAt -eq $lastStagingRunCreatedAt -and
-                    [long]$previousRun.id -gt [long]$lastStagingRun.id)) {
-                $lastStagingRun = $previousRun
-                $lastStagingRunCreatedAt = $previousRunCreatedAt
+                $lastStagingRun.head_sha -cne $LastSuccessfulCommitSha.ToLowerInvariant()) {
+                Stop-Preflight 'Last successful staging release is missing or does not match authenticated Actions history.'
+            }
+        } elseif ($null -ne $lastStagingRun) {
+            Stop-Preflight 'Initial Staging bootstrap is allowed only when no successful deployment is recorded.'
+        } else {
+            $deploymentHistory = Get-ActionsMetadata 'actions/workflows/deploy_authcraft-api-staging.yml/runs?branch=main&per_page=100'
+            if ($deploymentHistory.total_count -ne @($deploymentHistory.workflow_runs).Count) {
+                Stop-Preflight 'Staging deployment history is truncated; initial bootstrap is not safe.'
+            }
+            if (@($deploymentHistory.workflow_runs).Count -gt 0) {
+                Stop-Preflight 'A Staging deployment attempt exists; initial bootstrap cannot replace its recovery checkpoint.'
             }
         }
-        if ($stagingJobs.Count -gt 1) {
-            Stop-Preflight 'Actions history contains ambiguous successful staging deployment jobs.'
-        }
-    }
-    if ($hasKnownBaseline) {
-        if ($null -eq $lastStagingRun -or
-            $lastStagingRun.head_sha -cne $LastSuccessfulCommitSha.ToLowerInvariant()) {
-            Stop-Preflight 'Last successful staging release is missing or does not match authenticated Actions history.'
-        }
-    } elseif ($null -ne $lastStagingRun) {
-        Stop-Preflight 'Initial Staging bootstrap is allowed only when no successful deployment is recorded.'
     }
 
     $stagingPreflightOutput = & (Join-Path $PSScriptRoot 'Test-StagingPreflightMetadata.ps1') 2>$null
@@ -231,21 +278,38 @@ try {
 
     $baselineState = 'verified'
     $previousRunId = [string]$lastStagingRun.id
-    if (-not $hasKnownBaseline) {
+    $preflightState = 'ready_for_review'
+    if ($hasRecoveryCheckpoint) {
+        $baselineState = 'partial_recovery'
+        $previousRunId = $RecoveryDeploymentRunId
+        $preflightState = 'recovery_review_required'
+    } elseif (-not $hasKnownBaseline) {
         $baselineState = 'unknown'
         $previousRunId = $null
     }
     [pscustomobject]@{
-        state = 'ready_for_review'
+        state = $preflightState
         artifact_validation = 'verified'
         deployment_authorized = $false
-        blocking_reason = 'Authenticated SQL review and temporary publish permission verification are still required before Publish.'
+        blocking_reason = if ($hasRecoveryCheckpoint) {
+            'The partial deployment is evidence only; live state reconciliation, exact SQL review, and separate authorization are still required.'
+        } else {
+            'Authenticated SQL review and temporary publish permission verification are still required before Publish.'
+        }
         commit_sha = $ExpectedCommitSha.ToLowerInvariant()
         run_id = $ExpectedRunId
         baseline_state = $baselineState
-        baseline_commit_sha = if ($hasKnownBaseline) { $LastSuccessfulCommitSha.ToLowerInvariant() } else { 'unknown' }
-        bootstrap_review_required = -not $hasKnownBaseline
+        baseline_commit_sha = if ($hasRecoveryCheckpoint) {
+            $recoveryCheckpoint.baseline_commit_sha
+        } elseif ($hasKnownBaseline) {
+            $LastSuccessfulCommitSha.ToLowerInvariant()
+        } else {
+            'unknown'
+        }
+        bootstrap_review_required = (-not $hasKnownBaseline -and -not $hasRecoveryCheckpoint)
         previous_run_id = $previousRunId
+        recovery_checkpoint = if ($hasRecoveryCheckpoint) { $recoveryCheckpoint } else { $null }
+        live_state_reconciliation_required = $hasRecoveryCheckpoint
         target = 'staging'
         database_server = 'authcraftdbbrasil.database.windows.net'
         database_name = 'authcraft-db-staging'
@@ -254,7 +318,7 @@ try {
 }
 catch {
     if ($_.Exception.Message -notmatch '^(Production publication|Release publication|Commit or run|Manifest|A release|Candidate release)') {
-        Write-Error 'Release preflight failed. No deployment command was run.'
+        Write-Error "Release preflight failed. No deployment command was run. $($_.Exception.Message)"
         exit 1
     }
     throw

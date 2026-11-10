@@ -110,3 +110,20 @@ antes de afirmar que se cumplio el objetivo.
 
 La aprobacion protegida de production sigue pendiente; esta preparacion no autoriza
 publicar alli. No usar cuentas reales, invitaciones ni emails para pruebas de recuperacion.
+
+## Checkpoint de una publicacion parcial
+
+Cuando una publicacion Staging termina con fallo despues de aplicar SQL o desplegar
+la API, `scripts/Get-StagingRecoveryCheckpoint.ps1` puede validar la procedencia
+autenticada del run, sus etapas completadas y fallidas, la vigencia de los artefactos,
+el manifiesto y CandidateRelease del run original, y que no exista un intento de
+despliegue posterior. El preflight de empaquetado puede recibir ese run mediante
+`recovery_deployment_run_id` para generar `recovery_review_required` y conservar
+el commit como `partial_recovery`.
+
+Este checkpoint es evidencia historica, no una confirmacion del estado vivo de
+Staging ni un baseline exitoso. No habilita el despliegue, no autoriza SQL/API ni
+promocion, y no reemplaza la conciliacion del esquema, la version activa, la revision
+autenticada exacta o la autorizacion expresa de publicacion. El workflow de
+despliegue no acepta el identificador de recuperacion; cualquier reanudacion sigue
+sujeta a sus gates normales.

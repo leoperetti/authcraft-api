@@ -31,6 +31,51 @@ public sealed class DeploymentRecoveryTests
         Assert.DoesNotContain("DROP DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void StagingDeployment_StopsAfterApiFailureAndAlwaysPreservesAttemptEvidence()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), ".github", "workflows", "deploy_authcraft-api-staging.yml"));
+        var databaseIndex = workflow.IndexOf("- name: Publish the reviewed Staging database plan", StringComparison.Ordinal);
+        var applicationIndex = workflow.IndexOf("- name: Deploy the same API package to Staging", StringComparison.Ordinal);
+        var smokeIndex = workflow.IndexOf("- name: Verify Staging health, synthetic login, and tenant roles", StringComparison.Ordinal);
+        var recordIndex = workflow.IndexOf("- name: Record Staging deployment attempt", StringComparison.Ordinal);
+        var uploadIndex = workflow.IndexOf("- name: Preserve Staging deployment evidence", StringComparison.Ordinal);
+
+        Assert.True(databaseIndex >= 0);
+        Assert.True(applicationIndex > databaseIndex);
+        Assert.True(smokeIndex > applicationIndex);
+        Assert.True(recordIndex > smokeIndex);
+        Assert.True(uploadIndex > recordIndex);
+
+        var applicationStep = workflow[applicationIndex..smokeIndex];
+        var smokeStep = workflow[smokeIndex..recordIndex];
+        var recordStep = workflow[recordIndex..uploadIndex];
+        var evidenceUpload = workflow[uploadIndex..];
+
+        Assert.Contains(
+            "if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
+            applicationStep,
+            StringComparison.Ordinal);
+        Assert.Contains("staging-release\\api\\api.zip", applicationStep, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+            applicationStep, @"(?m)^\s+az webapp deploy ").Cast<System.Text.RegularExpressions.Match>());
+        Assert.DoesNotContain("previous", applicationStep, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("RESTORE DATABASE", applicationStep, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP DATABASE", applicationStep, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("if:", smokeStep, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("APPLICATION_RESULT: ${{ steps.application.outcome }}", recordStep, StringComparison.Ordinal);
+        Assert.Contains("SMOKE_RESULT: ${{ steps.smoke.outcome }}", recordStep, StringComparison.Ordinal);
+        Assert.Contains("$attempt.failure_stage = if ($env:APPLICATION_RESULT", recordStep, StringComparison.Ordinal);
+        Assert.Contains("{ 'application_publish' }", recordStep, StringComparison.Ordinal);
+        Assert.Contains("if: always()", recordStep, StringComparison.Ordinal);
+        Assert.Contains("if: always()", evidenceUpload, StringComparison.Ordinal);
+        Assert.Contains("name: staging-deployment-attempt", evidenceUpload, StringComparison.Ordinal);
+        Assert.Contains("retention-days: 30", evidenceUpload, StringComparison.Ordinal);
+        Assert.DoesNotContain("RESTORE DATABASE", evidenceUpload, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP DATABASE", evidenceUpload, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("report")]
     [InlineData("script")]

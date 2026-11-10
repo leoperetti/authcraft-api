@@ -536,6 +536,18 @@ Entra reales. No completar estas tareas solo por pasar las pruebas simuladas.
   detenga las etapas de publicacion; por ello T043 permanece pendiente y no
   habilita ni autoriza despliegue.
 
+  Actualizacion local 2026-11-10: se amplio la verificacion del workflow real de
+  reanudacion Staging para comprobar que una falla API impide smoke, no dispara
+  restauracion/rollback automatico y conserva siempre el intento con retencion de
+  30 dias. Esto complementa el registro simulado API-failed y los casos de
+  incompatibilidad/escrituras ya cubiertos por `ProductionDeploymentReportTests`.
+  La seleccion focalizada `DeploymentRecoveryTests`,
+  `ProductionDeploymentReportTests` y `StagingPublisherVerificationTests` paso
+  54/54, sin omisiones.
+  T043 sigue pendiente: no existe ni se habilita un controlador de promocion/
+  recuperacion Production que permita acreditar sus escenarios de extremo a
+  extremo; Production permanece bloqueado.
+
 ### Implementation for User Story 4
 
 - [X] T044 [US4] Redactar `docs\deployment-recovery.md` con diagnóstico por etapa, identificación de versión/evidencia, recuperación de paquete anterior solo compatible, fallos parciales DacFx y escalamiento manual PITR a base separada; requerir revisión de escrituras/autorización y prohibir restauraciones encima de datos actuales y rollback SQL automático.
@@ -682,6 +694,11 @@ parcial/desconocido y nunca continúan API/promocion ni disparan rollback destru
   fases con seis casos y TRX validado, mas 120 regresiones). T068 cerrado localmente;
   posteriormente T069 completada con autorizacion y evidencia del run 42705333969;
   T070 sigue pendiente de revision autenticada del responsable.
+- [X] T073 [US3] Agregar validacion autenticada del checkpoint de publicacion parcial en `scripts\Get-StagingRecoveryCheckpoint.ps1`, integrarla en `scripts\Test-ReleasePreflight.ps1` y exponerla solo al workflow review-only de empaquetado; verificar que nunca convierta el estado parcial en baseline elegible ni autorice despliegue/promocion. Documentar los limites en `docs\deployment-recovery.md` y cubrir evidencia valida, procedencia, artefactos y rechazos con pruebas simuladas.
+  Validacion local: 53 pruebas de `DeploymentPipelineTests` y
+  `StagingRecoveryCheckpointTests` aprobadas, sin cambios remotos ni Publish.
+  T035/T040 y la conciliacion del estado vivo siguen pendientes; T073 no los
+  completa ni habilita una publicacion.
 
 **MVP del incremento**: T062–T064, evidencia local del alcance real. No avanzar a
 publicacion si falla ese gate, aunque la opcion este activada. US1 no requiere
@@ -789,6 +806,7 @@ La tabla es la fuente de prerrequisitos reales; orden numérico por sí solo no 
 | T070 | T069; responsable autorizado revisa candidato nuevo, no aprobacion fabricada |
 | T071 | T064, T066; ejecutar antes de publicacion aun si US4 remoto esta bloqueado |
 | T072 | T064, T067, T071; integrar T068–T070 cuando disponibles; registrar bloqueos, no completar por omision |
+| T073 | T027, T032; validacion local review-only, no depende de autorizacion de despliegue |
 
 Prerrequisitos adicionales de cierre: T033 requiere T067/T070; T035/T038 requieren
 T067/T068 y su verificacion integral; T040 requiere ademas T064/T068/T070/T071.

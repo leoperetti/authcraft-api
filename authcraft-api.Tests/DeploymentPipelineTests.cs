@@ -157,6 +157,28 @@ public sealed class DeploymentPipelineTests
         Assert.False(preflight.RootElement.GetProperty("deployment_authorized").GetBoolean());
     }
 
+    [Fact]
+    public void Preflight_RecordsVerifiedPartialRecoveryWithoutCallingItAValidBaseline()
+    {
+        using var sandbox = new PipelineSandbox();
+        Assert.Equal(0, sandbox.CreateManifest().ExitCode);
+
+        var result = sandbox.RunPreflight(
+            "refs/heads/main", "staging", "unknown", scenario: "recovery",
+            recoveryRunId: "12340");
+
+        Assert.True(result.ExitCode == 0, result.Output + result.Error);
+        using var preflight = JsonDocument.Parse(result.Output);
+        Assert.Equal("recovery_review_required", preflight.RootElement.GetProperty("state").GetString());
+        Assert.Equal("partial_recovery", preflight.RootElement.GetProperty("baseline_state").GetString());
+        Assert.Equal(sandbox.ParentCommitSha, preflight.RootElement.GetProperty("baseline_commit_sha").GetString());
+        Assert.Equal("12340", preflight.RootElement.GetProperty("previous_run_id").GetString());
+        Assert.False(preflight.RootElement.GetProperty("deployment_authorized").GetBoolean());
+        Assert.False(preflight.RootElement.GetProperty("bootstrap_review_required").GetBoolean());
+        Assert.True(preflight.RootElement.GetProperty("live_state_reconciliation_required").GetBoolean());
+        Assert.False(preflight.RootElement.GetProperty("recovery_checkpoint").GetProperty("baseline_eligible").GetBoolean());
+    }
+
     [Theory]
     [InlineData("wrong-live-runtime")]
     [InlineData("wrong-live-publisher")]
@@ -428,9 +450,96 @@ public sealed class DeploymentPipelineTests
             string lastCommitSha,
             string runId = "12345",
             string scenario = "",
-            bool allowInitialBootstrap = false)
+            bool allowInitialBootstrap = false,
+            string recoveryRunId = "")
         {
             var harnessPath = Path.Combine(DirectoryPath, "preflight-harness.ps1");
+            var recoveryArtifactDirectory = Path.Combine(DirectoryPath, "recovery-artifact");
+            if (scenario == "recovery")
+            {
+                Directory.CreateDirectory(recoveryArtifactDirectory);
+                var apiHash = new string('a', 64);
+                var dacpacHash = new string('b', 64);
+                var reportHash = new string('c', 64);
+                var scriptHash = new string('d', 64);
+                var originalReleaseDirectory = Path.Combine(recoveryArtifactDirectory, "original-release");
+                Directory.CreateDirectory(originalReleaseDirectory);
+                File.WriteAllText(Path.Combine(originalReleaseDirectory, "release-manifest.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        commit_sha = ParentCommitSha,
+                        run_id = "12344",
+                        api = new { artifact = "api", sha256 = apiHash },
+                        database = new { artifact = "dacpac", sha256 = dacpacHash }
+                    }));
+                File.WriteAllText(Path.Combine(originalReleaseDirectory, "candidate-release.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        commit_sha = ParentCommitSha,
+                        run_id = "12344",
+                        api_artifact_name = "api",
+                        api_sha256 = apiHash,
+                        dacpac_artifact_name = "dacpac",
+                        dacpac_sha256 = dacpacHash,
+                        state = "built",
+                        staging_validation_state = "not_validated",
+                        staging_validation_reference = (object?)null,
+                        promotion_authorized = false
+                    }));
+                File.WriteAllText(Path.Combine(recoveryArtifactDirectory, "candidate-release.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        commit_sha = ParentCommitSha,
+                        run_id = "12344",
+                        api_artifact_name = "api",
+                        api_sha256 = apiHash,
+                        dacpac_artifact_name = "dacpac",
+                        dacpac_sha256 = dacpacHash,
+                        state = "staging_failed",
+                        staging_validation_state = "not_validated",
+                        staging_validation_reference = (object?)null,
+                        promotion_authorized = false
+                    }));
+                File.WriteAllText(Path.Combine(recoveryArtifactDirectory, "deployment-attempt.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        deployment_run_id = "12340",
+                        release_run_id = "12344",
+                        commit_sha = ParentCommitSha,
+                        target_environment = "staging",
+                        database_server = "authcraftdbbrasil.database.windows.net",
+                        database_name = "authcraft-db-staging",
+                        result = "failed",
+                        schema_result = "succeeded",
+                        application_result = "succeeded",
+                        permission_grant_result = "succeeded",
+                        permission_revoke_result = "succeeded",
+                        smoke_result = "failed",
+                        failure_stage = "smoke",
+                        include_transactional_scripts = true,
+                        postdeploy_transaction = true,
+                        transaction_scope = "separate_schema_and_postdeploy",
+                        postdeploy_result = "unknown",
+                        failure_state_verification = "pending",
+                        dacpac_sha256 = dacpacHash,
+                        deploy_report_sha256 = reportHash,
+                        deploy_script_sha256 = scriptHash
+                    }));
+                File.WriteAllText(Path.Combine(recoveryArtifactDirectory, "sql-attempt.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        release_run_id = "12344",
+                        commit_sha = ParentCommitSha,
+                        target_environment = "staging",
+                        database_server = "authcraftdbbrasil.database.windows.net",
+                        database_name = "authcraft-db-staging",
+                        result = "succeeded",
+                        schema_result = "succeeded",
+                        dacpac_sha256 = dacpacHash,
+                        deploy_report_sha256 = reportHash,
+                        deploy_script_sha256 = scriptHash
+                    }));
+            }
             File.WriteAllText(harnessPath, $$"""
                 $ErrorActionPreference = 'Stop'
                 function az {
@@ -499,7 +608,19 @@ public sealed class DeploymentPipelineTests
                         switch ($name) {
                             'api' { Copy-Item -LiteralPath '{{ApiPath}}' -Destination (Join-Path $destination 'api.zip') }
                             'dacpac' { Copy-Item -LiteralPath '{{DacpacPath}}' -Destination (Join-Path $destination 'database.dacpac') }
-                            'release-manifest' { Copy-Item -LiteralPath '{{ManifestPath}}' -Destination (Join-Path $destination 'manifest.json') }
+                            'release-manifest' {
+                                if ($args[2] -eq '12344') {
+                                    Copy-Item -LiteralPath (Join-Path '{{recoveryArtifactDirectory}}' 'original-release\release-manifest.json') -Destination (Join-Path $destination 'release-manifest.json')
+                                } else {
+                                    Copy-Item -LiteralPath '{{ManifestPath}}' -Destination (Join-Path $destination 'manifest.json')
+                                }
+                            }
+                            'candidate-release' {
+                                Get-ChildItem -LiteralPath (Join-Path '{{recoveryArtifactDirectory}}' 'original-release') | Copy-Item -Destination $destination -Recurse -Force
+                            }
+                            'staging-deployment-attempt' {
+                                Get-ChildItem -LiteralPath '{{recoveryArtifactDirectory}}' -File | Copy-Item -Destination $destination -Force
+                            }
                             default { throw 'Unexpected artifact download.' }
                         }
                         if ('{{scenario}}' -eq 'download-tamper' -and $name -eq 'api') {
@@ -550,6 +671,40 @@ public sealed class DeploymentPipelineTests
                                     expires_at = $expires.ToString('o'); workflow_run = @{ id = 12345; head_sha = '{{CommitSha}}' } }
                             } } | ConvertTo-Json -Depth 5 -Compress)
                         }
+                        'repos/leoperetti/authcraft-api/actions/runs/12340' {
+                            return (@{ id = 12340; path = '.github/workflows/deploy_authcraft-api-staging.yml';
+                                event = 'workflow_dispatch'; head_branch = 'main'; head_sha = '{{new string('7', 40)}}';
+                                status = 'completed'; conclusion = 'failure'; created_at = '2026-11-09T12:30:00Z';
+                                repository = @{ full_name = 'leoperetti/authcraft-api' };
+                                head_repository = @{ full_name = 'leoperetti/authcraft-api' }
+                            } | ConvertTo-Json -Depth 4 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12340/jobs?per_page=100' {
+                            return (@{ total_count = 2; jobs = @(
+                                @{ name = 'resolve-release'; status = 'completed'; conclusion = 'success'; steps = @() },
+                                @{ name = 'deploy-reviewed-release'; status = 'completed'; conclusion = 'failure'; steps = @(
+                                    @{ name = 'Publish the reviewed Staging database plan'; conclusion = 'success' },
+                                    @{ name = 'Revoke and independently verify the Staging publisher role'; conclusion = 'success' },
+                                    @{ name = 'Deploy the same API package to Staging'; conclusion = 'success' },
+                                    @{ name = 'Verify Staging health, synthetic login, and tenant roles'; conclusion = 'failure' }
+                                ) }
+                            ) } | ConvertTo-Json -Depth 6 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12340/artifacts?per_page=100' {
+                            return (@{ total_count = 1; artifacts = @(@{
+                                name = 'staging-deployment-attempt'; expired = $false;
+                                expires_at = [DateTime]::UtcNow.AddDays(1).ToString('o');
+                                workflow_run = @{ id = 12340; head_sha = '{{new string('7', 40)}}' }
+                            }) } | ConvertTo-Json -Depth 5 -Compress)
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12344' {
+                            return (@{ id = 12344; path = '.github/workflows/main_authcraft-api-staging.yml';
+                                event = 'workflow_dispatch'; head_branch = 'main'; head_sha = '{{ParentCommitSha}}';
+                                status = 'completed'; conclusion = 'success';
+                                repository = @{ full_name = 'leoperetti/authcraft-api' };
+                                head_repository = @{ full_name = 'leoperetti/authcraft-api' }
+                            } | ConvertTo-Json -Depth 4 -Compress)
+                        }
                         'repos/leoperetti/authcraft-api/actions/workflows/main_authcraft-api-staging.yml/runs?branch=main&status=success&per_page=100' {
                             if ('{{scenario}}' -eq 'missing-baseline') { return '{"total_count":0,"workflow_runs":[]}' }
                             $sha = '{{ParentCommitSha}}'
@@ -560,7 +715,28 @@ public sealed class DeploymentPipelineTests
                                 event = 'workflow_dispatch'; repository = @{ full_name = 'leoperetti/authcraft-api' };
                                 head_repository = @{ full_name = 'leoperetti/authcraft-api' } }) } | ConvertTo-Json -Depth 5 -Compress)
                         }
+                        'repos/leoperetti/authcraft-api/actions/workflows/deploy_authcraft-api-staging.yml/runs?branch=main&per_page=100' {
+                            if ('{{scenario}}' -eq 'recovery') {
+                                return (@{ total_count = 1; workflow_runs = @(@{
+                                    id = 12340; created_at = '2026-11-09T12:30:00Z';
+                                    path = '.github/workflows/deploy_authcraft-api-staging.yml'; head_branch = 'main';
+                                    repository = @{ full_name = 'leoperetti/authcraft-api' };
+                                    head_repository = @{ full_name = 'leoperetti/authcraft-api' }
+                                }) } | ConvertTo-Json -Depth 5 -Compress)
+                            }
+                            if ('{{scenario}}' -eq 'bootstrap-with-deployment') {
+                                return '{"total_count":1,"workflow_runs":[{"id":12340}]}'
+                            }
+                            return '{"total_count":0,"workflow_runs":[]}'
+                        }
                         'repos/leoperetti/authcraft-api/actions/runs/12344/jobs?per_page=100' {
+                            if ('{{scenario}}' -eq 'recovery') {
+                                return (@{ total_count = 3; jobs = @(
+                                    @{ name = 'validate'; status = 'completed'; conclusion = 'success' },
+                                    @{ name = 'verify-staging-publisher'; status = 'completed'; conclusion = 'success' },
+                                    @{ name = 'preflight-staging'; status = 'completed'; conclusion = 'success' }
+                                ) } | ConvertTo-Json -Depth 4 -Compress)
+                            }
                             if ('{{scenario}}' -eq 'initial-bootstrap') {
                                 return '{"total_count":1,"jobs":[{"name":"validate","status":"completed","conclusion":"success"}]}'
                             }
@@ -571,6 +747,13 @@ public sealed class DeploymentPipelineTests
                                 return '{"total_count":1,"jobs":[{"name":"build","status":"completed","conclusion":"success"}]}'
                             }
                             return '{"total_count":1,"jobs":[{"name":"deploy-staging","status":"completed","conclusion":"success"}]}'
+                        }
+                        'repos/leoperetti/authcraft-api/actions/runs/12344/artifacts?per_page=100' {
+                            $artifactNames = @('api', 'dacpac', 'release-manifest', 'candidate-release', 'staging-schema-review')
+                            return (@{ total_count = $artifactNames.Count; artifacts = @($artifactNames | ForEach-Object {
+                                @{ name = $_; expired = $false; expires_at = [DateTime]::UtcNow.AddDays(1).ToString('o');
+                                    workflow_run = @{ id = 12344; head_sha = '{{ParentCommitSha}}' } }
+                            }) } | ConvertTo-Json -Depth 5 -Compress)
                         }
                         default { throw 'Unexpected GitHub API request.' }
                     }
@@ -588,6 +771,9 @@ public sealed class DeploymentPipelineTests
                 }
                 if ('{{allowInitialBootstrap}}' -eq 'True') {
                     $preflightParameters.AllowInitialStagingBootstrap = $true
+                }
+                if (-not [string]::IsNullOrWhiteSpace('{{recoveryRunId}}')) {
+                    $preflightParameters.RecoveryDeploymentRunId = '{{recoveryRunId}}'
                 }
                 & '{{Path.Combine(_scriptsDirectory, "Test-ReleasePreflight.ps1")}}' @preflightParameters
                 """);
