@@ -1275,6 +1275,33 @@ Publish remoto; Production permanece bloqueado.
 
 ### Ventana de permisos automatizada: preparacion local
 
+Nuevo candidato preparado sin despliegue:
+[42740341496](https://github.com/leoperetti/authcraft-api/actions/runs/42740341496),
+commit 800d09b0722907dea3306652b7f061407a355d68.
+Validate y verify-staging-publisher terminaron success: 196 pruebas aprobadas,
+2 pruebas SQL locales omitidas; packaging y evaluacion SQL OIDC de solo lectura
+completados. Se descargaron los cinco artefactos y se verificaron los hashes del
+ZIP/DACPAC contra manifiesto y CandidateRelease, ademas de run/commit de toolchain.
+La lectura directa de AssemblyMetadata CommitSha del DLL dentro del ZIP confirma
+800d09b0722907dea3306652b7f061407a355d68, no local.
+API SHA256: 6743c095b6c11b0adce3d1fd6e6e4c9c19f6ad25b49fa2778491067f68cb6294.
+DACPAC SHA256: a13de9b561f282d72b3250cafcdf8b77fdbe974e4b3036059bb2c61c8aa8c6fe.
+CandidateRelease permanece built/not_validated, promotion_authorized=false.
+El run completo termino failure: preflight rechazo en la validacion inicial de
+metadatos la ausencia de LastSuccessfulCommitSha con bootstrap=false; no llego a
+validar procedencia ni estado vivo. No es un baseline recuperado ni un candidato
+habilitado para despliegue. No hubo Publish, grant ni despliegue API.
+Production sigue disabled_manually.
+
+El intento anterior 42739778389 fallo antes del packaging por una prueba de
+recuperacion obsoleta que prohibia always incluso en la revocacion obligatoria.
+Se corrigio la prueba para exigir cleanup always, gate API success con SQL y
+revocacion exitosos, y smoke sin excepciones al comportamiento success.
+La misma seleccion de Actions paso localmente y en el nuevo run.
+Pendientes: acordar recuperacion explicita del baseline tras SQL/API aplicadas y
+smoke fallido, revisar los nuevos report/SQL exactos y autorizar otra publicacion.
+No se sustituye ninguno de estos gates por bootstrap unknown.
+
 Preparacion de recuperacion autorizada: commit/push del fix de version y nuevo
 packaging/evaluacion de solo lectura, sin otro despliegue. La comprobacion actual
 confirma live/ready healthy/version=local y evidencia del intento previo con
