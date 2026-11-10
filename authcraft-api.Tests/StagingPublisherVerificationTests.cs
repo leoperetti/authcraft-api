@@ -9,6 +9,92 @@ namespace authcraft_api.Tests;
 public sealed class StagingPublisherVerificationTests
 {
     [Fact]
+    public void PermissionRehearsal_OnlyManagesRolesAndSerializesWithDeployment()
+    {
+        var workflow = File.ReadAllText(Path.Combine(FindRepositoryRoot(),
+            ".github", "workflows", "verify_staging_permission_manager.yml")).ReplaceLineEndings("\n");
+        Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
+        Assert.Contains("if: github.ref == 'refs/heads/main'", workflow, StringComparison.Ordinal);
+        Assert.Contains("group: authcraft-staging-deployment", workflow, StringComparison.Ordinal);
+        Assert.Contains("cancel-in-progress: false", workflow, StringComparison.Ordinal);
+        Assert.Contains("client-id: c376b9f5-2b0b-406f-8579-ef8787001115", workflow, StringComparison.Ordinal);
+        Assert.Contains("finally {\n            & .\\scripts\\Set-StagingPublisherRole.ps1 -Mode Revoke", workflow, StringComparison.Ordinal);
+        Assert.Contains("if: always() && steps.manager-login.outcome == 'success'", workflow, StringComparison.Ordinal);
+        Assert.Contains("revocation_verified = $verified", workflow, StringComparison.Ordinal);
+        Assert.Contains("published = $false", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-DatabaseDeployment", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("webapp deploy", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("production", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("publisher")]
+    [InlineData("wrong-subscription")]
+    [InlineData("wrong-tenant")]
+    [InlineData("user-session")]
+    public async Task PermissionManager_RejectsWrongAzureContextBeforeSql(string scenario)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"authcraft-permission-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var helper = Path.Combine(FindRepositoryRoot(), "scripts", "Set-StagingPublisherRole.ps1").Replace("'", "''");
+            var path = Path.Combine(directory, "test.ps1");
+            File.WriteAllText(path, $$"""
+                $ErrorActionPreference = 'Stop'
+                function az {
+                    if ($args[0] -ne 'account' -or $args[1] -ne 'show') { throw 'Unexpected token or SQL access' }
+                    $global:LASTEXITCODE = 0
+                    @{
+                        id = '{{(scenario == "wrong-subscription" ? Guid.Empty.ToString() : "948a8f49-fd90-40d9-8fa9-12f722768a7a")}}'
+                        tenantId = '{{(scenario == "wrong-tenant" ? Guid.Empty.ToString() : "b7bd0c07-88dc-4c47-81ba-608fd7607a82")}}'
+                        user = @{
+                            type = '{{(scenario == "user-session" ? "user" : "servicePrincipal")}}'
+                            name = '{{(scenario == "publisher" ? "a2382f63-d653-47f3-82ca-9f2696f63f0a" : "c376b9f5-2b0b-406f-8579-ef8787001115")}}'
+                        }
+                    } | ConvertTo-Json
+                }
+                & '{{helper}}' -Mode Grant
+                """);
+            var start = new ProcessStartInfo("powershell.exe")
+            {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
+            };
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", path })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.Contains("Only the reviewed Staging permission manager", await output + await error, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void StagingPermissionWindow_SeparatesManagerAndRequiresCleanupBeforeApi()
+    {
+        var root = FindRepositoryRoot();
+        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "deploy_authcraft-api-staging.yml"));
+        var grant = workflow.IndexOf("-Mode Grant", StringComparison.Ordinal);
+        var publish = workflow.IndexOf("-Mode Publish", StringComparison.Ordinal);
+        var revoke = workflow.IndexOf("-Mode Revoke", StringComparison.Ordinal);
+        var application = workflow.IndexOf("az webapp deploy", StringComparison.Ordinal);
+        Assert.True(grant > 0 && publish > grant && revoke > publish && application > revoke);
+        Assert.Contains("if: always() && steps.permission-cleanup-login.outcome == 'success'", workflow, StringComparison.Ordinal);
+        Assert.Contains("steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'", workflow, StringComparison.Ordinal);
+        Assert.Contains("client-id: c376b9f5-2b0b-406f-8579-ef8787001115", workflow, StringComparison.Ordinal);
+        var helper = File.ReadAllText(Path.Combine(root, "scripts", "Set-StagingPublisherRole.ps1"));
+        Assert.Contains("$account.user.name -cne 'c376b9f5-2b0b-406f-8579-ef8787001115'", helper, StringComparison.Ordinal);
+        Assert.Contains("DB_NAME() <> N'authcraft-db-staging'", helper, StringComparison.Ordinal);
+        Assert.Contains("a2382f63-d653-47f3-82ca-9f2696f63f0a", helper, StringComparison.Ordinal);
+        Assert.Contains("Assert-PermissionState (Invoke-PermissionSql $permissionQuery) $false", helper, StringComparison.Ordinal);
+        Assert.Contains("ALTER ROLE [db_owner] DROP MEMBER", helper, StringComparison.Ordinal);
+        Assert.Contains("finally { $script:permissionToken = $null }", helper, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Workflow_KeepsVerificationOptInAndOutsideArtifactUploadSteps()
     {
         var workflow = File.ReadAllText(Path.Combine(
@@ -128,6 +214,7 @@ public sealed class StagingPublisherVerificationTests
     [InlineData("wrong-manifest", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
     [InlineData("wrong-attempt", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
     [InlineData("missing-manifest", "failed", "separate_schema_and_postdeploy", "pending", "succeeded")]
+    [InlineData("revoke-failed", "failed", "separate_schema_and_postdeploy", "pending", "not_executed")]
     public async Task StagingAttempt_PreservesEvidenceWithoutInferringRollbackOrSkippedSuccess(
         string scenario, string result, string scope, string failureState, string healthResult)
     {
@@ -190,6 +277,8 @@ public sealed class StagingPublisherVerificationTests
             processInfo.Environment["STARTED_AT"] = "2026-11-09T20:00:00Z";
             processInfo.Environment["TRANSACTION_RESULT"] = scenario == "before-sql" ? "failure" : "success";
             processInfo.Environment["PREFLIGHT_RESULT"] = scenario == "before-sql" ? "skipped" : "success";
+            processInfo.Environment["PERMISSION_GRANT_RESULT"] = scenario == "before-sql" ? "skipped" : "success";
+            processInfo.Environment["PERMISSION_REVOKE_RESULT"] = scenario == "before-sql" ? "skipped" : scenario == "revoke-failed" ? "failure" : "success";
             processInfo.Environment["DATABASE_RESULT"] = scenario switch
             {
                 "before-sql" => "skipped",
@@ -219,6 +308,8 @@ public sealed class StagingPublisherVerificationTests
             Assert.Equal(scope, attempt.RootElement.GetProperty("transaction_scope").GetString());
             Assert.Equal(failureState, attempt.RootElement.GetProperty("failure_state_verification").GetString());
             Assert.Equal(healthResult, attempt.RootElement.GetProperty("health_result").GetString());
+            if (scenario == "revoke-failed")
+                Assert.Equal("permission_revocation", attempt.RootElement.GetProperty("failure_stage").GetString());
             Assert.DoesNotContain("rolled_back", json, StringComparison.Ordinal);
             Assert.DoesNotContain("synthetic-secret-must-not-leak", json + File.ReadAllText(Path.Combine(directory, "summary.txt")), StringComparison.Ordinal);
             Assert.Equal(30, attempt.RootElement.GetProperty("report_retention_days").GetInt32());

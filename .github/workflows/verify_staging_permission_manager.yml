@@ -1,0 +1,91 @@
+name: Verify Staging permission manager (no deployment)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authcraft-staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  verify-permission-manager:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the Staging permission manager
+        id: manager-login
+        uses: azure/login@v2
+        with:
+          client-id: c376b9f5-2b0b-406f-8579-ef8787001115
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Rehearse grant and immediate revocation
+        id: rehearsal
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            & .\scripts\Set-StagingPublisherRole.ps1 -Mode Grant |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+          finally {
+            & .\scripts\Set-StagingPublisherRole.ps1 -Mode Revoke |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Independently verify cleanup even after rehearsal failure
+        if: always() && steps.manager-login.outcome == 'success'
+        id: cleanup
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\Set-StagingPublisherRole.ps1 -Mode Revoke |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Record sanitized permission rehearsal evidence
+        if: always()
+        shell: powershell
+        env:
+          LOGIN_RESULT: ${{ steps.manager-login.outcome }}
+          REHEARSAL_RESULT: ${{ steps.rehearsal.outcome }}
+          CLEANUP_RESULT: ${{ steps.cleanup.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:RUNNER_TEMP 'permission-manager-evidence'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $verified = $env:CLEANUP_RESULT -ceq 'success'
+          @{
+            run_id = $env:GITHUB_RUN_ID
+            commit_sha = $env:GITHUB_SHA
+            target_database = 'authcraft-db-staging'
+            login_result = $env:LOGIN_RESULT
+            rehearsal_result = $env:REHEARSAL_RESULT
+            cleanup_result = $env:CLEANUP_RESULT
+            revocation_verified = $verified
+            published = $false
+            verified_at = [DateTimeOffset]::UtcNow.ToString('o')
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $directory 'permission-manager.json') -Encoding UTF8
+          "Permission rehearsal: login=$env:LOGIN_RESULT; rehearsal=$env:REHEARSAL_RESULT; revocation_verified=$verified; published=false." |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          if (-not $verified) {
+            throw 'Revocation unverified: operator must inspect and revoke the publisher role before any deployment.'
+          }
+
+      - name: Preserve permission rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-permission-manager
+          path: ${{ runner.temp }}/permission-manager-evidence/
+          if-no-files-found: error
+          retention-days: 30

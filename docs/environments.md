@@ -1273,6 +1273,134 @@ de sus nuevos hashes). El run 42692449745 no contiene esta proteccion y no debe
 reutilizarse. No hubo commit/push/dispatch, conexiones Azure, permisos nuevos ni
 Publish remoto; Production permanece bloqueado.
 
+### Ventana de permisos automatizada: preparacion local
+
+Autorizacion posterior: preparar, commit/push y ejecutar exclusivamente el
+ensayo OIDC grant/revoke sin despliegue. Workflow manual
+verify_staging_permission_manager.yml, solo main, serializado con la publicacion
+Staging, ejecuta Grant y Revoke inmediato en finally, seguido de Revoke/verificacion
+independiente always. Conserva evidencia sanitizada 30 dias, sin secretos.
+79 pruebas focalizadas aprobadas, ninguna omitida, antes de subir. La autorizacion
+no incluye Publish, API, login de negocio ni Production. No reconstruye candidato.
+
+Concesion posterior explicitamente autorizada 2026-11-10T01:26:57Z: se agrego
+assigner_revoker a db_owner exclusivamente en authcraft-db-staging, validando
+previamente base y SID de ambas identidades. Una conexion nueva, con
+impersonacion de sesion, confirmo db_owner/CONTROL/ALTER ANY ROLE/IMPERSONATE
+del publicador=1 para la gestora; el publicador conserva db_owner=0.
+El permiso de la gestora es persistente y elevado, no minimo: el workflow
+retira solo el rol temporal del publicador. No se publico SQL/API ni se
+modifico Production. Falta prueba real de login OIDC/gestion desde Actions.
+
+Creacion posterior autorizada: se ejecuto CREATE USER [assigner_revoker] FROM
+EXTERNAL PROVIDER mediante sesion Entra administrativa, exclusivamente en
+authcraft-db-staging. Verificado EXTERNAL_USER con SID igual al client ID
+c376b9f5-2b0b-406f-8579-ef8787001115, coincidente con el guard del helper.
+No se concedieron roles: gestora db_owner=0 y publicador db_owner=0.
+Falta autorizacion/configuracion de los privilegios de gestion y prueba OIDC real.
+
+Diagnostico posterior autorizado, solo lectura: Reader de assigner_revoker
+verificado directamente en authcraft-db-staging, sin asignaciones heredadas.
+En SQL no existe usuario con nombre assigner_revoker ni SID correspondiente
+al client ID o principal ID de esa identidad. No se impersono una identidad
+no verificada ni se crearon usuarios/grants. El publicador permanece db_owner=0.
+La gestora no esta preparada para ejecutar el helper: falta provisionar su
+acceso SQL con privilegios revisados y verificar OIDC real desde Actions.
+
+El usuario indico como gestora Staging existente `assigner_revoker`, client ID
+`c376b9f5-2b0b-406f-8579-ef8787001115`. La reanudacion incorpora login OIDC
+separado con esa identidad despues del preflight y de las pruebas LocalDB.
+Set-StagingPublisherRole.ps1 valida cuenta Azure/suscripcion/tenant, base,
+SID de la gestora y SID del publicador; exige baseline de solo revision,
+concede db_owner y comprueba permisos efectivos desde conexion nueva.
+Si el grant o su verificacion falla, intenta retirar el rol y verificar baseline.
+No se da al publicador capacidad de elevarse.
+
+Antes de SQL se restaura la sesion publicadora. Despues, los pasos always
+restauran la gestora, revocan el rol de forma idempotente y verifican baseline
+desde conexion nueva, incluso si fallo SQL o el grant. Fallo de cleanup/login
+bloquea API y queda explicito en resumen/evidencia; el intento no puede acreditar
+Staging validado sin grant/revocacion exitosos. La API usa otra vez el publicador.
+Una caida total del runner, perdida de red o cancelacion forzada puede impedir
+always: no hay garantia absoluta de cleanup. El operador debe vigilar el run y,
+si no consta revocacion verificada, usar el procedimiento administrativo ya
+ensayado para DROP MEMBER y comprobar los permisos antes de cualquier reintento.
+No hay watchdog externo provisionado.
+
+Prerrequisitos NO verificados todavia: federacion de assigner_revoker para el
+subject GitHub main inmutable vigente, audiencia api://AzureADTokenExchange,
+issuer https://token.actions.githubusercontent.com, visibilidad de suscripcion
+para azure/login y usuario Entra contenido exclusivo en authcraft-db-staging.
+La gestora necesita poder alterar membresia de db_owner y ejecutar impersonacion
+para la verificacion; ALTER ANY ROLE por si solo no acredita poder modificar un
+rol fijo. El mecanismo directo exige privilegios elevados (normalmente db_owner
+en esta base), no se presenta como minimo privilegio. Revisar/aprobar esos
+privilegios de la gestora separadamente; no asignarlos automaticamente ni darle
+acceso a Production/runtime/vault. Si el SID contenido difiere, detener y
+diagnosticar, no recrearlo por suposicion. No se crearon federaciones ni grants.
+
+Verificacion posterior tras configuracion del usuario: assigner_revoker coincide
+con el client ID esperado y tenant correcto. Se encontro exactamente la credencial
+github-authcraft-staging-main con issuer https://token.actions.githubusercontent.com,
+audiencia api://AzureADTokenExchange y subject
+repo:leoperetti@12513421/authcraft-api@1404745493:ref:refs/heads/main.
+Configuracion federada verificada por ARM en solo lectura; falta intercambio OIDC
+real desde Actions. La consulta de asignaciones ARM devolvio cero roles para esta
+identidad: no se acredita visibilidad de suscripcion requerida por azure/login.
+Permisos/usuario SQL de la gestora siguen pendientes de verificacion. No se
+asignaron roles ni se ejecuto el workflow.
+
+Validacion local: 78 pruebas pipeline/publicador aprobadas sin omisiones,
+incluido rechazo ejecutado de cuatro contextos Azure incorrectos, orden de
+cleanup y simulacion de revocacion fallida. No equivalen a login OIDC de la
+gestora ni a grant/revoke SQL real desde Actions. Sin commit/push/dispatch.
+
+### Verificacion de cuenta y tenant sinteticos en Staging
+
+Actualizacion posterior 2026-11-10T00:34:07Z: con autorizacion explicita del
+usuario se retiro db_owner del publicador, tras validar base y SID exactos.
+Una conexion nueva verifico db_owner/ALTER/CONTROL/CREATE TABLE/ALTER dbo/
+SELECT e INSERT providers=0; CONNECT/VIEW DEFINITION=1.
+revocation_verified=true, published=false. El permiso ya no permanece activo.
+La proxima concesion debe coordinarse exclusivamente con la ventana de Publish
+y revocacion ante exito/fallo; el workflow actual no automatiza ese control.
+
+Consulta autorizada de solo lectura contra authcraft-db-staging: el client_id
+authcraft-staging identifica un tenant unico y activo (no coincide con su slug).
+La cuenta sintetica staging-admin@example.test existe una vez, tiene cuenta
+local con material de credenciales no vacio, membership activa y un rol
+asignado en ese tenant; existen cuatro roles del tenant. No se extrajeron hashes,
+salt, passwords, tokens ni datos de otras cuentas. No se ejecuto login ni
+se modificaron filas, permisos o configuracion.
+
+Los cuatro nombres de secretos smoke existen en GitHub. No se pueden consultar
+sus valores por API: no se acredita correspondencia de esos valores ni validez
+de la password por esta lectura. Login/roles HTTP siguen pendientes del smoke.
+
+El usuario informo que concedio db_owner; la consulta confirmo
+publisher_db_owner=1 para authcraft-staging-schema-publisher. El rol permanece
+activo y no fue concedido/revocado por este diagnostico. Debe coordinarse su
+revocacion incluso ante fallo, sin interpretar la comprobacion como autorizacion
+de Publish o deploy API. Production no fue consultado.
+
+### Revision autenticada del candidato 42721985281
+
+El responsable publico personalmente la
+[revision 6755129089](https://github.com/leoperetti/authcraft-api/issues/11#issuecomment-6755129089),
+actualizada 2026-11-10T00:17:48Z. La consulta autenticada a GitHub confirmo
+autor leoperetti, issue #11 abierta y ultima decision del responsable.
+Test-DeploymentReviewRecord devolvio true para run 42721985281, commit
+6f139baa4834681f9d6b93293948425331b0868e, baseline unknown, destino Staging,
+hashes DACPAC/report/SQL exactos, opciones y tres aceptaciones.
+No se transfirio la revision previa ni se publico/edito la decision por el asistente.
+
+Esta revision satisface el gate tecnico del nuevo candidato, no autoriza
+permisos temporales, Publish, deploy API, preparacion de datos ni Production.
+Antes de una publicacion autorizada se deben reconsultar decision/retencion,
+procedencia y plan live; revocacion, edicion incompatible o deriva bloquean.
+T037/T039/T040 siguen parciales por permisos/publicacion real y verificaciones
+operacionales pendientes. No se conecto Azure SQL ni se concedieron roles.
+
 ### T039: verificacion remota review-only del registro inicial
 
 Autorizacion ejecutada en
@@ -1309,7 +1437,8 @@ conexion local configurada en ese job; esas omisiones no acreditan ensayos de
 motor. Las 72 regresiones locales previas no tuvieron omisiones. Se mantienen
 las advertencias preexistentes de nullabilidad/CS0108 y de runtime de actions.
 
-La revision del run 42705333969 NO aprueba este candidato, aunque el SQL coincida:
+Estado al cerrar la evaluacion, antes de la revision 6755129089:
+la revision del run 42705333969 NO aprueba este candidato, aunque el SQL coincida:
 commit/run/DACPAC son distintos. Antes de Publish se requiere nueva revision
 autenticada con estos valores y revalidacion live del plan/baseline. No se creo
 ni edito una aprobacion en nombre del responsable. Baseline inicial sigue unknown;

@@ -411,6 +411,15 @@ No agregar tablas para el modelo operativo de publicaciones.
 
 - [ ] T038 [US3] Ejecutar T026/T027 con scripts nuevos y builds/tests focalizados; comprobar antes de activación `.github\workflows\main_authcraft-api-staging.yml` y el estado remoto contra casos negativos, ausencia de rutas production y opciones de SQL, sin disparar workflows de publicación como prueba local.
 
+  Preparacion local posterior T037: el usuario identifica assigner_revoker
+  (c376b9f5-2b0b-406f-8579-ef8787001115) como gestora de permisos.
+  La reanudacion concede despues de preflight, vuelve a publicador para SQL,
+  revoca/verifica con gestora en always y bloquea API sin cleanup exitoso.
+  Helper verifica destino/SIDs/contexto/baseline y conexion nueva; no modifica
+  Azure sin ejecucion autorizada. 78 pruebas locales pasan, cero omisiones.
+  Falta verificar OIDC/permisos SQL reales de la gestora y ensayar el flujo en
+  Actions; no hay watchdog externo. T037/T038 siguen pendientes; no se publico.
+
   Avance 2026-11-09: 130 pruebas focalizadas pasaron y una prueba SQL local se
   omitio por falta de `AUTHCRAFT_TEST_SQL_CONNECTION`; la prueba de review DacFx
   paso 17/17 tras agregar `ScriptDatabaseOptions=False`. MSBuild local no tiene
@@ -463,6 +472,11 @@ No agregar tablas para el modelo operativo de publicaciones.
   autenticada propia por commit/run/DACPAC distintos. Sin Publish/API/permisos.
   T039 permanece parcial solo para reanudacion real/estados posteriores y ciclo
   protegido; el registro inicial remoto ya esta verificado.
+  Revision posterior: comentario 6755129089 del responsable, actualizado
+  2026-11-10T00:17:48Z, verificado por API como ultima decision en #11 abierta.
+  Test-DeploymentReviewRecord=true para el candidato 42721985281 y todos sus
+  valores exactos. Gate de revision propia satisfecho, no autorizacion operacional.
+  T037/T039/T040 siguen parciales; no hubo permisos, conexiones SQL ni Publish.
 - [ ] T040 [US3] Con autorización explícita, recuperación T044 documentada y gates T028/T029/T036/T037 satisfechos, activar y ejecutar la publicación staging de `.github\workflows\main_authcraft-api-staging.yml` solo tras acreditar revisión SQL T033; después de aplicar el esquema compatible y antes del smoke, preparar cuenta/tenant sintéticos exclusivamente en staging mediante servicios/repositorios existentes y configuración explícita, con autorización de esa escritura y sin envío de correo. Comprobar hashes/versiones, salud/login/roles y fallos con fixtures aislados, y registrar evidencia en `docs\environments.md` sin cambios ni conexiones de prueba a production.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 

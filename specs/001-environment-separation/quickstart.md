@@ -5,13 +5,29 @@ Development fue validado en LocalDB; no se conectó Azure SQL durante esa valida
 
 ## Prerrequisitos y límites
 
+La reanudacion ahora incluye localmente gestion temporal mediante
+`assigner_revoker` (client ID c376b9f5-2b0b-406f-8579-ef8787001115).
+Antes de ejecutarla verificar federacion OIDC y usuario/permisos SQL de la gestora:
+ver [ventana de permisos](../../docs/environments.md#ventana-de-permisos-automatizada-preparacion-local).
+Grant despues de preflight; revoke/inspeccion con always antes de API, tambien
+ante fallo. Si el runner desaparece o no verifica cleanup, revocacion administrativa
+obligatoria antes de reintentar. No es garantia de cleanup ante perdida del runner.
+
+Revision actual verificada: el responsable publico la
+[decision 6755129089](https://github.com/leoperetti/authcraft-api/issues/11#issuecomment-6755129089)
+para el candidato 42721985281. El parser exacto aprobo autor, ultima decision,
+run/commit/baseline/destino, hashes, opciones y aceptaciones.
+La revision propia ya no esta pendiente; sigue requiriendo reconsulta antes de
+Publish y no autoriza operaciones remotas. Permisos/revocacion, SQL Publish,
+deploy API y preparacion sintetica necesitan alcance operacional explicito.
+
 Actualizacion posterior: el nuevo
 [run 42721985281](https://github.com/leoperetti/authcraft-api/actions/runs/42721985281)
 completo packaging, registro inicial built, OIDC SQL review-only y preflight,
 sin Publish/API/permisos. Registro/manifiesto/paquetes descargados y hashes
 verificados. Esta completada la comprobacion remota del registro inicial; falta
 la reanudacion real. El candidato nuevo requiere revision autenticada propia,
-no hereda la del run 42705333969. Ver
+no hereda la del run 42705333969 (la revision propia ya consta arriba). Ver
 [evidencia y hashes](../../docs/environments.md#t039-verificacion-remota-review-only-del-registro-inicial).
 Las secciones siguientes conservan la cronologia de las evaluaciones anteriores.
 

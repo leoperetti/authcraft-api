@@ -272,6 +272,27 @@ jobs:
           }
           $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
+      - name: Log in to the Staging permission manager
+        uses: azure/login@v2
+        with:
+          client-id: c376b9f5-2b0b-406f-8579-ef8787001115
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Grant the temporary Staging publisher role
+        id: permission-grant
+        shell: powershell
+        run: |
+          & .\scripts\Set-StagingPublisherRole.ps1 -Mode Grant |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Restore the Staging publisher session before SQL
+        uses: azure/login@v2
+        with:
+          client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
       - name: Publish the reviewed Staging database plan
         id: database
         shell: pwsh
@@ -327,7 +348,43 @@ jobs:
             $accessToken = $null
           }
 
+      - name: Restore the permission manager for mandatory cleanup
+        if: always() && steps.permission-grant.outcome != 'skipped' && steps.permission-grant.outcome != ''
+        id: permission-cleanup-login
+        uses: azure/login@v2
+        with:
+          client-id: c376b9f5-2b0b-406f-8579-ef8787001115
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
+      - name: Revoke and independently verify the Staging publisher role
+        if: always() && steps.permission-cleanup-login.outcome == 'success'
+        id: permission-revoke
+        shell: powershell
+        run: |
+          & .\scripts\Set-StagingPublisherRole.ps1 -Mode Revoke |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Require verified revocation before application deployment
+        if: always() && steps.permission-grant.outcome != 'skipped' && steps.permission-grant.outcome != ''
+        shell: pwsh
+        env:
+          REVOCATION_RESULT: ${{ steps.permission-revoke.outcome }}
+        run: |
+          if ($env:REVOCATION_RESULT -cne 'success') {
+            throw 'CRITICAL: Staging publisher revocation is unverified. Stop deployment and revoke the role through the recovery operator.'
+          }
+
+      - name: Restore the Staging application publisher session
+        if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
+        uses: azure/login@v2
+        with:
+          client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
+          tenant-id: b7bd0c07-88dc-4c47-81ba-608fd7607a82
+          subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
+
       - name: Deploy the same API package to Staging
+        if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
         id: application
         shell: pwsh
         run: |
@@ -358,6 +415,8 @@ jobs:
           TRANSACTION_RESULT: ${{ steps.transaction-verification.outcome }}
           PREFLIGHT_RESULT: ${{ steps.preflight.outcome }}
           DATABASE_RESULT: ${{ steps.database.outcome }}
+          PERMISSION_GRANT_RESULT: ${{ steps.permission-grant.outcome }}
+          PERMISSION_REVOKE_RESULT: ${{ steps.permission-revoke.outcome }}
           APPLICATION_RESULT: ${{ steps.application.outcome }}
           SMOKE_RESULT: ${{ steps.smoke.outcome }}
           STARTED_AT: ${{ steps.attempt-start.outputs.started_at }}
@@ -411,6 +470,8 @@ jobs:
           $attempt.finished_at = [DateTimeOffset]::UtcNow.ToString('o')
           $attempt.transaction_test_result = Get-StageResult $env:TRANSACTION_RESULT
           $attempt.preflight_result = Get-StageResult $env:PREFLIGHT_RESULT
+          $attempt.permission_grant_result = Get-StageResult $env:PERMISSION_GRANT_RESULT
+          $attempt.permission_revoke_result = Get-StageResult $env:PERMISSION_REVOKE_RESULT
           $attempt.application_result = Get-StageResult $env:APPLICATION_RESULT
           $attempt.smoke_result = Get-StageResult $env:SMOKE_RESULT
           $attempt.health_result = if ($env:SMOKE_RESULT -eq 'failure') { 'unknown' } else { $attempt.smoke_result }
@@ -436,6 +497,7 @@ jobs:
           $candidateBindingValid = $attempt.commit_sha -ceq $env:RELEASE_COMMIT_SHA -and
             [string]$attempt.release_run_id -ceq $env:RELEASE_RUN_ID
           $stagingValidated = $manifestVerified -and $candidateBindingValid -and
+            $env:PERMISSION_GRANT_RESULT -eq 'success' -and $env:PERMISSION_REVOKE_RESULT -eq 'success' -and
             $env:TRANSACTION_RESULT -eq 'success' -and
             $env:PREFLIGHT_RESULT -eq 'success' -and $env:DATABASE_RESULT -eq 'success' -and
             $env:APPLICATION_RESULT -eq 'success' -and $env:SMOKE_RESULT -eq 'success' -and
@@ -448,6 +510,11 @@ jobs:
             $attempt.failure_stage = $null
             $attempt.sanitized_failure_summary = $null
             $attempt.recommended_next_step = $null
+          } elseif ($env:PERMISSION_GRANT_RESULT -notin @('', 'skipped') -and $env:PERMISSION_REVOKE_RESULT -ne 'success') {
+            $attempt.result = 'failed'
+            $attempt.failure_stage = 'permission_revocation'
+            $attempt.sanitized_failure_summary = 'Revocacion del permiso temporal no verificada; detener despliegue.'
+            $attempt.recommended_next_step = 'El operador debe revocar db_owner y verificar permisos desde una conexion nueva.'
           } elseif ($env:SMOKE_RESULT -eq 'success') {
             $attempt.result = 'failed'
             $attempt.failure_stage = 'evidence'
