@@ -137,6 +137,9 @@ concede el permiso temporal, no publica SQL, no despliega la API ni ejecuta smok
 La evaluacion es de solo lectura y no verifica por si sola el estado vivo de datos
 ni autoriza un despliegue. El checkpoint permanece `partial_recovery`,
 `baseline_eligible=false` y `deployment_authorized=false`.
+El registro del intento distingue `schema_evaluation_result` de `schema_result`:
+una evaluacion exitosa no significa que se haya publicado el esquema, y no se registra
+como fallo de preflight. `postdeploy_result` queda `not_executed`.
 
 Un Publish posterior requiere un dispatch separado con `review_only=false` y una
 revision autenticada para el candidato, hashes del plan, destino y run fallido

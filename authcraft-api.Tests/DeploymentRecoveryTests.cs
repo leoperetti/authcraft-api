@@ -53,6 +53,14 @@ public sealed class DeploymentRecoveryTests
         }
         Assert.Contains("$deploymentParameters.RecoveryDeploymentRunId = $env:RECOVERY_DEPLOYMENT_RUN_ID",
             writeStages, StringComparison.Ordinal);
+        var recordStep = workflow[recordIndex..];
+        Assert.Contains("SCHEMA_EVALUATION_RESULT: ${{ steps.recovery-evaluation.outcome }}", recordStep, StringComparison.Ordinal);
+        Assert.Contains("$attempt.schema_evaluation_result = Get-StageResult $env:SCHEMA_EVALUATION_RESULT",
+            recordStep, StringComparison.Ordinal);
+        Assert.Contains("if ($attempt.review_only -and $env:PREFLIGHT_RESULT -eq 'success')", recordStep,
+            StringComparison.Ordinal);
+        Assert.Contains("$attempt.failure_stage = $null", recordStep, StringComparison.Ordinal);
+        Assert.Contains("Staging review-only: preflight=", recordStep, StringComparison.Ordinal);
     }
 
     [Fact]

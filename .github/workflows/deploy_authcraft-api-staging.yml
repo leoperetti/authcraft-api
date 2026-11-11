@@ -516,6 +516,7 @@ jobs:
           REVIEW_ONLY: ${{ inputs.review_only }}
           TRANSACTION_RESULT: ${{ steps.transaction-verification.outcome }}
           PREFLIGHT_RESULT: ${{ steps.preflight.outcome }}
+          SCHEMA_EVALUATION_RESULT: ${{ steps.recovery-evaluation.outcome }}
           DATABASE_RESULT: ${{ steps.database.outcome }}
           PERMISSION_GRANT_RESULT: ${{ steps.permission-grant.outcome }}
           PERMISSION_REVOKE_RESULT: ${{ steps.permission-revoke.outcome }}
@@ -572,6 +573,7 @@ jobs:
           $attempt.recovery_deployment_run_id = $env:RECOVERY_DEPLOYMENT_RUN_ID
           $attempt.review_only = $env:REVIEW_ONLY -eq 'true'
           $attempt.deployment_authorized = $false
+          $attempt.schema_evaluation_result = Get-StageResult $env:SCHEMA_EVALUATION_RESULT
           $attempt.finished_at = [DateTimeOffset]::UtcNow.ToString('o')
           $attempt.transaction_test_result = Get-StageResult $env:TRANSACTION_RESULT
           $attempt.preflight_result = Get-StageResult $env:PREFLIGHT_RESULT
@@ -633,6 +635,23 @@ jobs:
           } elseif ($attempt.result -eq 'succeeded') {
             $attempt.result = 'failed'
           }
+          if ($attempt.review_only -and $env:PREFLIGHT_RESULT -eq 'success') {
+            if ($env:SCHEMA_EVALUATION_RESULT -eq 'success') {
+              $attempt.failure_stage = $null
+              $attempt.sanitized_failure_summary = $null
+              $attempt.recommended_next_step = 'Conciliar el estado vivo de Staging; cualquier Publish requiere autorizacion expresa separada.'
+              $attempt.postdeploy_result = 'not_executed'
+            } elseif ($env:SCHEMA_EVALUATION_RESULT -in @('failure', 'cancelled')) {
+              $attempt.result = 'failed'
+              $attempt.failure_stage = 'schema_evaluation'
+              $attempt.sanitized_failure_summary = 'Fallo la evaluacion SQL de solo lectura; no se autorizo la publicacion.'
+              $attempt.recommended_next_step = 'Revisar la evaluacion SQL y conservar el estado de Staging sin cambios.'
+            } else {
+              $attempt.failure_stage = 'schema_evaluation'
+              $attempt.sanitized_failure_summary = 'La evaluacion SQL no se ejecuto; no se autorizo la publicacion.'
+              $attempt.recommended_next_step = 'Verificar el run antes de iniciar cualquier Publish.'
+            }
+          }
           $attempt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'deployment-attempt.json') -Encoding UTF8
           $candidate = [ordered]@{
             commit_sha = $env:RELEASE_COMMIT_SHA
@@ -667,8 +686,13 @@ jobs:
               ($env:SMOKE_RESULT -eq 'success' -and -not $stagingValidated)) {
             throw 'Candidate evidence is incomplete or inconsistent; no validation or promotion is authorized.'
           }
-          "Staging: result=$($attempt.result); transaction_scope=$($attempt.transaction_scope); postdeploy_result=$($attempt.postdeploy_result); failure_state_verification=$($attempt.failure_state_verification). No rollback is inferred from an exit code." |
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          if ($attempt.review_only) {
+            "Staging review-only: preflight=$($attempt.preflight_result); SQL_evaluation=$($attempt.schema_evaluation_result); deployment_authorized=false; no SQL/API publication or smoke was attempted." |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          } else {
+            "Staging: result=$($attempt.result); transaction_scope=$($attempt.transaction_scope); postdeploy_result=$($attempt.postdeploy_result); failure_state_verification=$($attempt.failure_state_verification). No rollback is inferred from an exit code." |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Preserve Staging deployment evidence
         if: always()
