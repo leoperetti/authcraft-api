@@ -17,6 +17,7 @@ param(
     [string]$SqlPackagePath,
     [string]$ReviewIssueNumber,
     [string]$StagingBaselineSha,
+    [string]$RecoveryDeploymentRunId,
     [string]$TransactionVerificationPath,
     [string]$AttemptPath,
     [string]$AllowedReviewer = 'leoperetti'
@@ -39,6 +40,10 @@ if ($AllowedReviewer -cne 'leoperetti') {
 if ($ExpectedCommitSha -notmatch '^[A-Fa-f0-9]{40}$' -or
     $ExpectedRunId -notmatch '^[1-9][0-9]*$') {
     throw 'Release commit and run metadata are missing or malformed.'
+}
+if (-not [string]::IsNullOrWhiteSpace($RecoveryDeploymentRunId) -and
+    $RecoveryDeploymentRunId -notmatch '^[1-9][0-9]*$') {
+    throw 'Recovery deployment run metadata is malformed.'
 }
 if (-not (Test-Path -LiteralPath $DacpacPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
@@ -231,7 +236,8 @@ function Get-AuthenticatedReview {
                 -DacpacSha256 $dacpacHash `
                 -ReportSha256 $reportHash `
                 -ScriptSha256 $scriptHash `
-                -StagingBaselineSha $StagingBaselineSha)) {
+                -StagingBaselineSha $StagingBaselineSha `
+                -RecoveryDeploymentRunId $RecoveryDeploymentRunId)) {
         throw 'Latest authenticated review does not approve this exact release, destination, and SQL plan.'
     }
     return $latestReview

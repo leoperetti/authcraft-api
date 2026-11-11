@@ -114,16 +114,36 @@ publicar alli. No usar cuentas reales, invitaciones ni emails para pruebas de re
 ## Checkpoint de una publicacion parcial
 
 Cuando una publicacion Staging termina con fallo despues de aplicar SQL o desplegar
-la API, `scripts/Get-StagingRecoveryCheckpoint.ps1` puede validar la procedencia
+la API, `scripts/Get-StagingRecoveryCheckpoint.ps1` valida la procedencia
 autenticada del run, sus etapas completadas y fallidas, la vigencia de los artefactos,
-el manifiesto y CandidateRelease del run original, y que no exista un intento de
-despliegue posterior. El preflight de empaquetado puede recibir ese run mediante
-`recovery_deployment_run_id` para generar `recovery_review_required` y conservar
-el commit como `partial_recovery`.
+el manifiesto y CandidateRelease del run original, y la ausencia de intentos mutantes
+posteriores. Solo tolera runs posteriores si sus pasos de permiso temporal, Publish
+SQL, revocacion, despliegue API y smoke quedaron explicitamente omitidos. El run
+actual solo se excluye mientras su estado autenticado sea `in_progress` durante el
+preflight.
 
 Este checkpoint es evidencia historica, no una confirmacion del estado vivo de
 Staging ni un baseline exitoso. No habilita el despliegue, no autoriza SQL/API ni
 promocion, y no reemplaza la conciliacion del esquema, la version activa, la revision
-autenticada exacta o la autorizacion expresa de publicacion. El workflow de
-despliegue no acepta el identificador de recuperacion; cualquier reanudacion sigue
-sujeta a sus gates normales.
+autenticada exacta o la autorizacion expresa de publicacion.
+
+El workflow de despliegue acepta `recovery_deployment_run_id` y `review_only`
+predeterminado en `true`. En ese modo verifica candidato y checkpoint, vuelve a
+generar DeployReport/Script contra Staging y no requiere credenciales de smoke, no
+concede el permiso temporal, no publica SQL, no despliega la API ni ejecuta smoke.
+La evaluacion es de solo lectura y no verifica por si sola el estado vivo de datos
+ni autoriza un despliegue. El checkpoint permanece `partial_recovery`,
+`baseline_eligible=false` y `deployment_authorized=false`.
+
+Un Publish posterior requiere un dispatch separado con `review_only=false` y una
+revision autenticada para el candidato, hashes del plan, destino y run fallido
+exactos. La revision debe incluir
+`recovery_deployment_run_id=<failed-run-id>` y
+`live_state_reconciled=accepted`, junto con los campos existentes de compatibilidad,
+impacto en datos, plan de recuperacion y opciones SqlPackage. Antes de aprobarla,
+el responsable debe conciliar la version API activa, esquema, constraints, semillas
+y escrituras recientes. El run, revision, checkpoint o preflight no autorizan por
+si solos Publish; se requiere autorizacion expresa separada.
+
+El bootstrap inicial no puede sustituir un checkpoint parcial. Ninguna ruta de
+recuperacion ejecuta rollback automatico ni restaura datos.

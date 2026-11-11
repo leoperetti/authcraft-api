@@ -875,6 +875,14 @@ aun no exigia `script_database_options`. El run `42564903495` no se debe aprobar
 nueva evaluacion del release final se registro abajo; aun requiere revision
 autenticada con todos los campos requeridos.
 
+Para una recuperacion parcial, el workflow de Staging acepta el run fallido como
+`recovery_deployment_run_id` y `review_only=true` por defecto. Ese modo solo valida
+checkpoint y preflight y genera DeployReport/Script; no concede permisos temporales,
+no publica SQL ni despliega API. Una futura revision autenticada debe agregar
+exactamente una linea `recovery_deployment_run_id=<failed-run-id>` y
+`live_state_reconciled=accepted`, despues de conciliar por separado el estado vivo.
+El checkpoint sigue siendo parcial y nunca se considera baseline satisfactorio.
+
 La API Staging continua devolviendo 404 en `/health/live`; la version de la API
 actual no esta acreditada. El ultimo log de OneDeploy de App Service registra el
 identificador corto `2d9d8af3f8`, que GitHub no resuelve como commit del repositorio.

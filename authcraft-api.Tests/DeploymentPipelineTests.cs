@@ -358,7 +358,72 @@ public sealed class DeploymentPipelineTests
 
         var result = sandbox.RunPowerShellFile(scriptPath);
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.ExitCode == 0, result.Output + result.Error);
+    }
+
+    [Fact]
+    public void DatabaseReview_RecoveryMustBindCheckpointAndLiveStateReconciliation()
+    {
+        using var sandbox = new PipelineSandbox();
+        var modulePath = Path.Combine(sandbox.RepositoryRoot, "scripts", "DeploymentReview.psm1");
+        var scriptPath = Path.Combine(sandbox.DirectoryPath, "verify-recovery-review.ps1");
+        var script = $$"""
+            Import-Module '{{modulePath}}' -Force
+            $body = @'
+            deployment_review=approved
+            run_id=12345
+            commit_sha={{new string('a', 40)}}
+            staging_baseline_sha=unknown
+            target_environment=staging
+            database_server=authcraftdbbrasil.database.windows.net
+            database_name=authcraft-db-staging
+            dacpac_sha256={{new string('b', 64)}}
+            api_compatibility=accepted
+            data_impact=accepted
+            recovery_plan=accepted
+            block_on_possible_data_loss=true
+            drop_objects_not_in_source=false
+            script_database_options=false
+            include_transactional_scripts=true
+            postdeploy_transaction=true
+            deploy_report_sha256={{new string('c', 64)}}
+            deploy_script_sha256={{new string('d', 64)}}
+            recovery_deployment_run_id=42737737446
+            live_state_reconciled=accepted
+            '@
+            $parameters = @{
+                Body = $body
+                Author = 'leoperetti'
+                AllowedReviewer = 'leoperetti'
+                RunId = '12345'
+                CommitSha = '{{new string('a', 40)}}'
+                TargetEnvironment = 'staging'
+                DatabaseServer = 'authcraftdbbrasil.database.windows.net'
+                DatabaseName = 'authcraft-db-staging'
+                DacpacSha256 = '{{new string('b', 64)}}'
+                ReportSha256 = '{{new string('c', 64)}}'
+                ScriptSha256 = '{{new string('d', 64)}}'
+                StagingBaselineSha = 'unknown'
+                RecoveryDeploymentRunId = '42737737446'
+            }
+            $valid = Test-DeploymentReviewRecord @parameters
+            $wrongCheckpointParameters = $parameters.Clone()
+            $wrongCheckpointParameters.RecoveryDeploymentRunId = '42740000000'
+            $wrongCheckpoint = Test-DeploymentReviewRecord @wrongCheckpointParameters
+            $missingReconciliationParameters = $parameters.Clone()
+            $missingReconciliationParameters.Body = $body.Replace('live_state_reconciled=accepted', '')
+            $missingReconciliation = Test-DeploymentReviewRecord @missingReconciliationParameters
+            $duplicateCheckpointParameters = $parameters.Clone()
+            $duplicateCheckpointParameters.Body = $body + "`nrecovery_deployment_run_id=42740000000"
+            $duplicateCheckpoint = Test-DeploymentReviewRecord @duplicateCheckpointParameters
+            if ($valid -and -not $wrongCheckpoint -and -not $missingReconciliation -and -not $duplicateCheckpoint) { exit 0 }
+            exit 1
+            """;
+        File.WriteAllText(scriptPath, script);
+
+        var result = sandbox.RunPowerShellFile(scriptPath);
+
+        Assert.True(result.ExitCode == 0, result.Output + result.Error);
     }
 
     [Fact]
@@ -720,6 +785,8 @@ public sealed class DeploymentPipelineTests
                                 return (@{ total_count = 1; workflow_runs = @(@{
                                     id = 12340; created_at = '2026-11-09T12:30:00Z';
                                     path = '.github/workflows/deploy_authcraft-api-staging.yml'; head_branch = 'main';
+                                    event = 'workflow_dispatch'; head_sha = '{{new string('7', 40)}}';
+                                    status = 'completed'; conclusion = 'failure';
                                     repository = @{ full_name = 'leoperetti/authcraft-api' };
                                     head_repository = @{ full_name = 'leoperetti/authcraft-api' }
                                 }) } | ConvertTo-Json -Depth 5 -Compress)

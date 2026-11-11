@@ -78,6 +78,23 @@ public sealed class DatabaseDeploymentReviewTests
     }
 
     [Theory]
+    [InlineData("recovery-approved", true)]
+    [InlineData("recovery-wrong-run", false)]
+    [InlineData("recovery-missing-live-reconciliation", false)]
+    public void Publish_RecoveryRequiresExactCheckpointAndLiveStateReview(string scenario, bool shouldPublish)
+    {
+        using var sandbox = new ReviewSandbox();
+
+        var result = sandbox.Run(scenario);
+
+        Assert.True(shouldPublish ? result.ExitCode == 0 : result.ExitCode != 0, result.Error);
+        var expectedActions = shouldPublish
+            ? new[] { "/Action:DeployReport", "/Action:Script", "/Action:DeployReport", "/Action:Script", "/Action:Publish" }
+            : new[] { "/Action:DeployReport", "/Action:Script" };
+        Assert.Equal(expectedActions, sandbox.Actions);
+    }
+
+    [Theory]
     [InlineData("missing-proof")]
     [InlineData("invalid-proof")]
     [InlineData("wrong-tool-proof")]
@@ -390,6 +407,14 @@ public sealed class DatabaseDeploymentReviewTests
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-recovery-plan') {
                         $body = $body -replace '(?m)^recovery_plan=.*\r?\n', ''
                     }
+                    if ($env:REVIEW_TEST_SCENARIO -like 'recovery-*') {
+                        $recoveryRunId = '42737737446'
+                        if ($env:REVIEW_TEST_SCENARIO -eq 'recovery-wrong-run') { $recoveryRunId = '42740000000' }
+                        $body += "`nrecovery_deployment_run_id=$recoveryRunId"
+                        if ($env:REVIEW_TEST_SCENARIO -ne 'recovery-missing-live-reconciliation') {
+                            $body += "`nlive_state_reconciled=accepted"
+                        }
+                    }
                     if ($env:REVIEW_TEST_SCENARIO -eq 'missing-options') {
                         $body = $body -replace '(?m)^script_database_options=.*\r?\n', ''
                     }
@@ -432,6 +457,9 @@ public sealed class DatabaseDeploymentReviewTests
                     StagingBaselineSha = 'unknown'
                     AttemptPath = '{{AttemptPath}}'
                     TransactionVerificationPath = '{{Path.Combine(_directory, "transaction-verification.json")}}'
+                }
+                if ($env:REVIEW_TEST_SCENARIO -like 'recovery-*') {
+                    $parameters.RecoveryDeploymentRunId = '42737737446'
                 }
                 $proofDirectory = '{{_directory}}'
                 $cases = @(

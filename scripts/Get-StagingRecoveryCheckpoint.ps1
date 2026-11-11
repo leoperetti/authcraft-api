@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[1-9][0-9]*$')]
     [string]$DeploymentRunId,
+    [ValidatePattern('^[1-9][0-9]*$')]
+    [string]$CurrentDeploymentRunId,
     [Parameter(Mandatory = $true)]
     [string]$OutputDirectory
 )
@@ -74,6 +76,36 @@ function Assert-RequiredStep {
     }
 }
 
+function Assert-NonMutatingDeploymentRun {
+    param([object]$Run)
+
+    $jobs = Get-ActionsMetadata "actions/runs/$($Run.id)/jobs?per_page=100"
+    if ($jobs.total_count -ne @($jobs.jobs).Count) {
+        throw 'A later Staging deployment job history is incomplete.'
+    }
+    [void](Assert-RequiredJob $jobs.jobs 'resolve-release' 'success')
+    $deploymentJobs = @($jobs.jobs | Where-Object { $_.name -ceq 'deploy-reviewed-release' })
+    if ($deploymentJobs.Count -ne 1 -or $deploymentJobs[0].status -cne 'completed') {
+        throw 'A later Staging deployment attempt cannot be proven non-mutating.'
+    }
+
+    $writeStepNames = @(
+        'Grant the temporary Staging publisher role',
+        'Publish the reviewed Staging database plan',
+        'Revoke and independently verify the Staging publisher role',
+        'Deploy the same API package to Staging',
+        'Verify Staging health, synthetic login, and tenant roles'
+    )
+    foreach ($stepName in $writeStepNames) {
+        $matchingSteps = @($deploymentJobs[0].steps | Where-Object { $_.name -ceq $stepName })
+        if ($matchingSteps.Count -ne 1 -or
+            $matchingSteps[0].status -cne 'completed' -or
+            $matchingSteps[0].conclusion -cne 'skipped') {
+            throw 'A newer Staging deployment run may have changed the target; the recovery checkpoint is stale.'
+        }
+    }
+}
+
 function Get-UniqueEvidenceFile {
     param(
         [string]$Root,
@@ -114,6 +146,10 @@ try {
         $deploymentRun.head_sha -notmatch '^[a-f0-9]{40}$') {
         throw 'The selected run is not an authenticated failed Staging deployment from main.'
     }
+    if (-not [string]::IsNullOrWhiteSpace($CurrentDeploymentRunId) -and
+        $CurrentDeploymentRunId -notmatch '^[1-9][0-9]*$') {
+        throw 'The current Staging deployment run ID is malformed.'
+    }
 
     $deploymentJobs = Get-ActionsMetadata "actions/runs/$DeploymentRunId/jobs?per_page=100"
     if ($deploymentJobs.total_count -ne @($deploymentJobs.jobs).Count) {
@@ -142,12 +178,24 @@ try {
             $historyRun.head_repository.full_name -cne $repository -or
             $historyRun.path -cne $deploymentWorkflowPath -or
             $historyRun.head_branch -cne 'main' -or
+            $historyRun.event -cne 'workflow_dispatch' -or
+            $historyRun.head_sha -notmatch '^[a-f0-9]{40}$' -or
             [string]$historyRun.id -notmatch '^[1-9][0-9]*$') {
             throw "Staging deployment history contains unverifiable metadata for run $($historyRun.id)."
         }
+        if ([string]$historyRun.id -ceq $CurrentDeploymentRunId) {
+            if ($historyRun.status -cne 'in_progress' -or
+                $historyRun.conclusion) {
+                throw 'The current Staging recovery run is not an active preflight.'
+            }
+            continue
+        }
         if ([string]$historyRun.id -cne $DeploymentRunId -and
             [DateTimeOffset]::Parse($historyRun.created_at) -gt $deploymentCreatedAt) {
-            throw 'A newer Staging deployment attempt exists; the recovery checkpoint is stale.'
+            if ($historyRun.status -cne 'completed') {
+                throw 'A later Staging deployment run is still active; the recovery checkpoint is stale.'
+            }
+            Assert-NonMutatingDeploymentRun $historyRun
         }
     }
     if (@($recoveryHistory.workflow_runs | Where-Object { [string]$_.id -ceq $DeploymentRunId }).Count -ne 1) {

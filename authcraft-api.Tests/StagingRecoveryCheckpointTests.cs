@@ -14,7 +14,7 @@ public sealed class StagingRecoveryCheckpointTests
     }
 
     [Fact]
-    public void RecoveryReview_IsAvailableOnlyThroughPackagingPreflightAndCannotAuthorizePublish()
+    public void RecoveryReview_IsWiredToNonAuthorizingDeploymentPreflightAndReviewOnlyMode()
     {
         var root = FindRepositoryRoot();
         var preflight = File.ReadAllText(Path.Combine(root, "scripts", "Test-ReleasePreflight.ps1"));
@@ -38,8 +38,13 @@ public sealed class StagingRecoveryCheckpointTests
         Assert.True(preflightCheckoutIndex >= 0 && preflightArtifactDownloadIndex > preflightCheckoutIndex);
         Assert.Contains("fetch-depth: 0", packagingWorkflow[preflightCheckoutIndex..preflightArtifactDownloadIndex], StringComparison.Ordinal);
         Assert.Contains("initial bootstrap cannot replace its recovery checkpoint", preflight, StringComparison.Ordinal);
-        Assert.DoesNotContain("RecoveryDeploymentRunId", deploymentWorkflow, StringComparison.Ordinal);
-        Assert.Contains("preflight.state -cne 'ready_for_review'", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("recovery_deployment_run_id:", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("review_only:", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("$preflightParameters.RecoveryDeploymentRunId", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("recovery_review_required", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("preflight.recovery_checkpoint.baseline_eligible -ne $false", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("if: inputs.review_only == true && success()", deploymentWorkflow, StringComparison.Ordinal);
+        Assert.Contains("-Mode Evaluate", deploymentWorkflow, StringComparison.Ordinal);
         Assert.Contains("$preflight.deployment_authorized -ne $false", deploymentWorkflow, StringComparison.Ordinal);
     }
 
@@ -54,6 +59,9 @@ public sealed class StagingRecoveryCheckpointTests
     [InlineData("wrong-release", false)]
     [InlineData("expired-artifact", false)]
     [InlineData("newer-deployment", false)]
+    [InlineData("newer-mutating-deployment", false)]
+    [InlineData("newer-review-only", true)]
+    [InlineData("current-review-only", true)]
     [InlineData("missing-sql-evidence", false)]
     public async Task RecoveryCheckpoint_RequiresExactAuthenticatedPartialDeploymentEvidence(
         string scenario,
@@ -118,9 +126,12 @@ public sealed class StagingRecoveryCheckpointTests
             var targetDatabase = _scenario == "wrong-target" ? "authcraft-db" : "authcraft-db-staging";
             var releaseRunId = _scenario == "wrong-release" ? "99999" : "42721985281";
             var artifactExpired = _scenario == "expired-artifact";
-            var runIds = _scenario == "newer-deployment"
-                ? "[{\"id\":42737737446,\"created_at\":\"2026-11-10T01:50:00Z\",\"repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"head_repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\"},{\"id\":42740000000,\"created_at\":\"2026-11-10T02:00:00Z\",\"repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"head_repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\"}]"
-                : "[{\"id\":42737737446,\"created_at\":\"2026-11-10T01:50:00Z\",\"repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"head_repository\":{\"full_name\":\"leoperetti/authcraft-api\"},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\"}]";
+            var includesLaterRun = _scenario is "newer-deployment" or "newer-mutating-deployment" or "newer-review-only" or "current-review-only";
+            var laterRunStatus = _scenario == "current-review-only" ? "in_progress" : "completed";
+            var historySha = new string('7', 40);
+            var runIds = includesLaterRun
+                ? $"[{{\"id\":42737737446,\"created_at\":\"2026-11-10T01:50:00Z\",\"repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"head_repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\",\"head_sha\":\"{historySha}\",\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"conclusion\":\"failure\"}},{{\"id\":42740000000,\"created_at\":\"2026-11-10T02:00:00Z\",\"repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"head_repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\",\"head_sha\":\"{historySha}\",\"event\":\"workflow_dispatch\",\"status\":\"{laterRunStatus}\"}}]"
+                : $"[{{\"id\":42737737446,\"created_at\":\"2026-11-10T01:50:00Z\",\"repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"head_repository\":{{\"full_name\":\"leoperetti/authcraft-api\"}},\"path\":\".github/workflows/deploy_authcraft-api-staging.yml\",\"head_branch\":\"main\",\"head_sha\":\"{historySha}\",\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"conclusion\":\"failure\"}}]";
             var sqlEvidence = _scenario == "missing-sql-evidence" ? "$null" : "'sql-attempt.json'";
             File.WriteAllText(harnessPath, $$"""
                 $ErrorActionPreference = 'Stop'
@@ -172,6 +183,21 @@ public sealed class StagingRecoveryCheckpointTests
                                 })
                             } | ConvertTo-Json -Depth 5 -Compress)
                         }
+                        'repos/leoperetti/authcraft-api/actions/runs/42740000000/jobs?per_page=100' {
+                            $stepConclusion = if ('{{_scenario}}' -eq 'newer-review-only') { 'skipped' } else { 'success' }
+                            return (@{
+                                total_count = 2; jobs = @(
+                                    @{ name = 'resolve-release'; status = 'completed'; conclusion = 'success'; steps = @() },
+                                    @{ name = 'deploy-reviewed-release'; status = 'completed'; conclusion = 'success'; steps = @(
+                                        @{ name = 'Grant the temporary Staging publisher role'; status = 'completed'; conclusion = $stepConclusion },
+                                        @{ name = 'Publish the reviewed Staging database plan'; status = 'completed'; conclusion = $stepConclusion },
+                                        @{ name = 'Revoke and independently verify the Staging publisher role'; status = 'completed'; conclusion = $stepConclusion },
+                                        @{ name = 'Deploy the same API package to Staging'; status = 'completed'; conclusion = $stepConclusion },
+                                        @{ name = 'Verify Staging health, synthetic login, and tenant roles'; status = 'completed'; conclusion = $stepConclusion }
+                                    ) }
+                                )
+                            } | ConvertTo-Json -Depth 6 -Compress)
+                        }
                         'repos/leoperetti/authcraft-api/actions/runs/42721985281' {
                             return (@{
                                 id = 42721985281; path = '.github/workflows/main_authcraft-api-staging.yml';
@@ -201,12 +227,19 @@ public sealed class StagingRecoveryCheckpointTests
                             } | ConvertTo-Json -Depth 5 -Compress)
                         }
                         'repos/leoperetti/authcraft-api/actions/workflows/deploy_authcraft-api-staging.yml/runs?branch=main&per_page=100' {
-                            return '{"total_count":{{(_scenario == "newer-deployment" ? 2 : 1)}},"workflow_runs":{{runIds}}}'
+                            return '{"total_count":{{(includesLaterRun ? 2 : 1)}},"workflow_runs":{{runIds}}}'
                         }
                         default { throw "Unexpected GitHub endpoint: $($args[1])" }
                     }
                 }
-                & '{{_scriptPath}}' -DeploymentRunId '42737737446' -OutputDirectory '{{DirectoryPath}}'
+                $checkpointParameters = @{
+                    DeploymentRunId = '42737737446'
+                    OutputDirectory = '{{DirectoryPath}}'
+                }
+                if ('{{_scenario}}' -eq 'current-review-only') {
+                    $checkpointParameters.CurrentDeploymentRunId = '42740000000'
+                }
+                & '{{_scriptPath}}' @checkpointParameters
                 """);
             var processInfo = new ProcessStartInfo("powershell.exe")
             {

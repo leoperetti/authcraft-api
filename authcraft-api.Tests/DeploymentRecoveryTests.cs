@@ -7,6 +7,51 @@ namespace authcraft_api.Tests;
 public sealed class DeploymentRecoveryTests
 {
     [Fact]
+    public void StagingRecovery_ReviewOnlyEvaluatesSqlWithoutRunningWriteStages()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), ".github", "workflows", "deploy_authcraft-api-staging.yml"));
+        var inputsIndex = workflow.IndexOf("      recovery_deployment_run_id:", StringComparison.Ordinal);
+        var reviewOnlyIndex = workflow.IndexOf("      review_only:", StringComparison.Ordinal);
+        var preflightIndex = workflow.IndexOf("- name: Verify release provenance and current Staging gates", StringComparison.Ordinal);
+        var evaluationIndex = workflow.IndexOf("- name: Evaluate the exact Staging SQL plan without publishing", StringComparison.Ordinal);
+        var permissionManagerIndex = workflow.IndexOf("- name: Log in to the Staging permission manager", StringComparison.Ordinal);
+        var recordIndex = workflow.IndexOf("- name: Record Staging deployment attempt", StringComparison.Ordinal);
+
+        Assert.True(inputsIndex >= 0 && reviewOnlyIndex > inputsIndex);
+        Assert.Contains("default: true", workflow[reviewOnlyIndex..]);
+        Assert.True(preflightIndex >= 0 && evaluationIndex > preflightIndex);
+        Assert.True(permissionManagerIndex > evaluationIndex && recordIndex > permissionManagerIndex);
+        Assert.Contains("$preflightParameters.RecoveryDeploymentRunId", workflow[preflightIndex..evaluationIndex], StringComparison.Ordinal);
+        Assert.Contains("recovery_review_required", workflow[preflightIndex..evaluationIndex], StringComparison.Ordinal);
+        Assert.Contains("-Mode Evaluate", workflow[evaluationIndex..permissionManagerIndex], StringComparison.Ordinal);
+        Assert.DoesNotContain("Set-StagingPublisherRole.ps1", workflow[evaluationIndex..permissionManagerIndex], StringComparison.Ordinal);
+        Assert.DoesNotContain("/Action:Publish", workflow[evaluationIndex..permissionManagerIndex], StringComparison.Ordinal);
+        Assert.DoesNotContain("az webapp deploy", workflow[evaluationIndex..permissionManagerIndex], StringComparison.Ordinal);
+
+        var writeStages = workflow[permissionManagerIndex..recordIndex];
+        foreach (var stepName in new[]
+        {
+            "Log in to the Staging permission manager",
+            "Grant the temporary Staging publisher role",
+            "Restore the Staging publisher session before SQL",
+            "Publish the reviewed Staging database plan",
+            "Restore the Staging application publisher session",
+            "Deploy the same API package to Staging",
+            "Verify Staging health, synthetic login, and tenant roles"
+        })
+        {
+            var stepIndex = writeStages.IndexOf($"- name: {stepName}", StringComparison.Ordinal);
+            Assert.True(stepIndex >= 0, $"Missing Staging deployment step: {stepName}");
+            var nextStepIndex = writeStages.IndexOf("\n      - name:", stepIndex + 1, StringComparison.Ordinal);
+            var step = nextStepIndex < 0 ? writeStages[stepIndex..] : writeStages[stepIndex..nextStepIndex];
+            Assert.Contains("if: inputs.review_only != true && success()", step, StringComparison.Ordinal);
+        }
+        Assert.Contains("$deploymentParameters.RecoveryDeploymentRunId = $env:RECOVERY_DEPLOYMENT_RUN_ID",
+            writeStages, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void StagingDeployment_DoesNotContinueApiOrSmokeAfterSqlFailure()
     {
         var workflow = File.ReadAllText(Path.Combine(
@@ -21,10 +66,10 @@ public sealed class DeploymentRecoveryTests
         var smokeIndex = deploymentSteps.IndexOf("- name: Verify Staging health, synthetic login, and tenant roles", StringComparison.Ordinal);
         Assert.True(applicationIndex > 0 && smokeIndex > applicationIndex);
         var applicationSteps = deploymentSteps[applicationIndex..];
-        Assert.Contains("if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
+        Assert.Contains("if: inputs.review_only != true && success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
             applicationSteps, StringComparison.Ordinal);
         Assert.DoesNotContain("always()", applicationSteps, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("if:", deploymentSteps[smokeIndex..], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("if: inputs.review_only != true && success()", deploymentSteps[smokeIndex..], StringComparison.Ordinal);
         Assert.Contains("if: always() && steps.permission-cleanup-login.outcome == 'success'", deploymentSteps, StringComparison.Ordinal);
         Assert.Contains("throw 'The reviewed Staging database deployment failed.'", deploymentSteps, StringComparison.Ordinal);
         Assert.DoesNotContain("RESTORE DATABASE", deploymentSteps, StringComparison.OrdinalIgnoreCase);
@@ -54,7 +99,7 @@ public sealed class DeploymentRecoveryTests
         var evidenceUpload = workflow[uploadIndex..];
 
         Assert.Contains(
-            "if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
+            "if: inputs.review_only != true && success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'",
             applicationStep,
             StringComparison.Ordinal);
         Assert.Contains("staging-release\\api\\api.zip", applicationStep, StringComparison.Ordinal);
@@ -63,7 +108,7 @@ public sealed class DeploymentRecoveryTests
         Assert.DoesNotContain("previous", applicationStep, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("RESTORE DATABASE", applicationStep, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DROP DATABASE", applicationStep, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("if:", smokeStep, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("if: inputs.review_only != true && success()", smokeStep, StringComparison.Ordinal);
         Assert.Contains("APPLICATION_RESULT: ${{ steps.application.outcome }}", recordStep, StringComparison.Ordinal);
         Assert.Contains("SMOKE_RESULT: ${{ steps.smoke.outcome }}", recordStep, StringComparison.Ordinal);
         Assert.Contains("$attempt.failure_stage = if ($env:APPLICATION_RESULT", recordStep, StringComparison.Ordinal);

@@ -8,9 +8,9 @@ on:
         type: string
         required: true
       review_issue_number:
-        description: Open GitHub issue containing the authenticated review for this exact release
+        description: Open GitHub issue with the authenticated review; required when review_only is false
         type: string
-        required: true
+        required: false
       staging_baseline_sha:
         description: Last verified Staging deployment commit, or unknown for a reviewed initial bootstrap
         type: string
@@ -21,6 +21,15 @@ on:
         type: boolean
         required: true
         default: false
+      recovery_deployment_run_id:
+        description: Failed partial Staging deployment run to validate as recovery evidence
+        type: string
+        required: false
+      review_only:
+        description: Evaluate the candidate and gates without granting publish permissions or changing Staging
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   actions: read
@@ -108,6 +117,7 @@ jobs:
           "started_at=$([DateTimeOffset]::UtcNow.ToString('o'))" | Add-Content -Path $env:GITHUB_OUTPUT
 
       - name: Require synthetic Staging smoke credentials before remote changes
+        if: inputs.review_only != true && success()
         id: credentials
         shell: pwsh
         env:
@@ -225,6 +235,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
           STAGING_BASELINE_SHA: ${{ inputs.staging_baseline_sha }}
           ALLOW_INITIAL_STAGING_BOOTSTRAP: ${{ inputs.allow_initial_staging_bootstrap }}
+          RECOVERY_DEPLOYMENT_RUN_ID: ${{ inputs.recovery_deployment_run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $artifactDirectory = Join-Path $env:RUNNER_TEMP 'staging-release'
@@ -252,6 +263,9 @@ jobs:
             RepositoryPath = (Resolve-Path '.\candidate-source').Path
           }
           if ($env:ALLOW_INITIAL_STAGING_BOOTSTRAP -eq 'true') {
+            if (-not [string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+              throw 'Initial Staging bootstrap cannot replace a partial-deployment recovery checkpoint.'
+            }
             if ($env:STAGING_BASELINE_SHA -cne 'unknown') {
               throw 'Initial Staging bootstrap requires an unknown baseline.'
             }
@@ -260,19 +274,94 @@ jobs:
           } else {
             $preflightParameters.LastSuccessfulCommitSha = $env:STAGING_BASELINE_SHA
           }
+          if (-not [string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+            if ($env:RECOVERY_DEPLOYMENT_RUN_ID -notmatch '^[1-9][0-9]*$' -or
+                $env:STAGING_BASELINE_SHA -cne 'unknown') {
+              throw 'Recovery requires an exact failed deployment run and an unknown successful baseline.'
+            }
+            $preflightParameters.RecoveryDeploymentRunId = $env:RECOVERY_DEPLOYMENT_RUN_ID
+          }
           $preflightOutput = & .\scripts\Test-ReleasePreflight.ps1 @preflightParameters
           if ($LASTEXITCODE -ne 0) { throw 'Staging preflight failed. No deployment was attempted.' }
           $preflight = ($preflightOutput -join "`n") | ConvertFrom-Json
-          if ($preflight.state -cne 'ready_for_review' -or
+          $expectedPreflightState = if ([string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+            'ready_for_review'
+          } else {
+            'recovery_review_required'
+          }
+          if ($preflight.state -cne $expectedPreflightState -or
               $preflight.target -cne 'staging' -or
               $preflight.commit_sha -cne $env:RELEASE_COMMIT_SHA -or
               [string]$preflight.run_id -cne $env:RELEASE_RUN_ID -or
               $preflight.deployment_authorized -ne $false) {
-            throw 'Staging preflight did not return the expected review-only state.'
+            throw 'Staging preflight did not return the expected non-authorizing state.'
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID) -and
+              ($preflight.recovery_checkpoint.deployment_run_id -cne $env:RECOVERY_DEPLOYMENT_RUN_ID -or
+               $preflight.recovery_checkpoint.baseline_state -cne 'partial_recovery' -or
+               $preflight.recovery_checkpoint.live_state -cne 'not_reconciled' -or
+               $preflight.recovery_checkpoint.baseline_eligible -ne $false -or
+               $preflight.recovery_checkpoint.deployment_authorized -ne $false -or
+               $preflight.recovery_checkpoint.promotion_authorized -ne $false -or
+               $preflight.live_state_reconciliation_required -ne $true)) {
+            throw 'Recovery evidence is not bound to the exact non-authorizing partial Staging checkpoint.'
           }
           $preflightOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
+      - name: Evaluate the exact Staging SQL plan without publishing
+        if: inputs.review_only == true && success()
+        id: recovery-evaluation
+        shell: pwsh
+        env:
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
+          SQLPACKAGE_PATH: ${{ steps.transaction-verification.outputs.sqlpackage_path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $account = az account show --output json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or
+              $account.id -cne '948a8f49-fd90-40d9-8fa9-12f722768a7a' -or
+              $account.tenantId -cne 'b7bd0c07-88dc-4c47-81ba-608fd7607a82' -or
+              $account.user.type -cne 'servicePrincipal' -or
+              $account.user.name -cne 'a2382f63-d653-47f3-82ca-9f2696f63f0a') {
+            throw 'Azure login is not the expected Staging metadata-review identity.'
+          }
+          $accessToken = az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
+            throw 'A Staging SQL review token could not be acquired.'
+          }
+          Write-Output "::add-mask::$accessToken"
+          $env:AUTHCRAFT_SQL_ACCESS_TOKEN = $accessToken
+          try {
+            $artifactDirectory = Join-Path $env:RUNNER_TEMP 'staging-release'
+            $evaluationOutput = & .\scripts\Invoke-DatabaseDeployment.ps1 `
+              -Mode Evaluate `
+              -TargetEnvironment staging `
+              -DacpacPath (Join-Path $artifactDirectory 'dacpac\authcraft-db.dacpac') `
+              -ManifestPath (Join-Path $artifactDirectory 'manifest\release-manifest.json') `
+              -ExpectedCommitSha $env:RELEASE_COMMIT_SHA `
+              -ExpectedRunId $env:RELEASE_RUN_ID `
+              -SqlPackagePath $env:SQLPACKAGE_PATH
+            if ($LASTEXITCODE -ne 0) { throw 'Read-only Staging SQL evaluation failed.' }
+            $evaluation = ($evaluationOutput -join "`n") | ConvertFrom-Json
+            if ($evaluation.state -cne 'evaluated' -or
+                $evaluation.target_environment -cne 'staging' -or
+                $evaluation.commit_sha -cne $env:RELEASE_COMMIT_SHA -or
+                [string]$evaluation.run_id -cne $env:RELEASE_RUN_ID -or
+                $evaluation.dacpac_sha256 -notmatch '^[a-f0-9]{64}$' -or
+                $evaluation.deploy_report_sha256 -notmatch '^[a-f0-9]{64}$' -or
+                $evaluation.deploy_script_sha256 -notmatch '^[a-f0-9]{64}$') {
+              throw 'Read-only SQL evaluation did not bind to the exact candidate and Staging destination.'
+            }
+            $evaluationOutput | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          }
+          finally {
+            $env:AUTHCRAFT_SQL_ACCESS_TOKEN = $null
+            $accessToken = $null
+          }
+
       - name: Log in to the Staging permission manager
+        if: inputs.review_only != true && success()
         uses: azure/login@v2
         with:
           client-id: c376b9f5-2b0b-406f-8579-ef8787001115
@@ -280,6 +369,7 @@ jobs:
           subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
 
       - name: Grant the temporary Staging publisher role
+        if: inputs.review_only != true && success()
         id: permission-grant
         shell: powershell
         run: |
@@ -287,6 +377,7 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
       - name: Restore the Staging publisher session before SQL
+        if: inputs.review_only != true && success()
         uses: azure/login@v2
         with:
           client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
@@ -294,6 +385,7 @@ jobs:
           subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
 
       - name: Publish the reviewed Staging database plan
+        if: inputs.review_only != true && success()
         id: database
         shell: pwsh
         env:
@@ -303,6 +395,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
           REVIEW_ISSUE_NUMBER: ${{ inputs.review_issue_number }}
           STAGING_BASELINE_SHA: ${{ inputs.staging_baseline_sha }}
+          RECOVERY_DEPLOYMENT_RUN_ID: ${{ inputs.recovery_deployment_run_id }}
           SQLPACKAGE_PATH: ${{ steps.transaction-verification.outputs.sqlpackage_path }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -321,18 +414,23 @@ jobs:
           Write-Output "::add-mask::$accessToken"
           $env:AUTHCRAFT_SQL_ACCESS_TOKEN = $accessToken
           try {
-            $publishOutput = & .\scripts\Invoke-DatabaseDeployment.ps1 `
-              -Mode Publish `
-              -TargetEnvironment staging `
-              -DacpacPath (Join-Path $env:RUNNER_TEMP 'staging-release\dacpac\authcraft-db.dacpac') `
-              -ManifestPath (Join-Path $env:RUNNER_TEMP 'staging-release\manifest\release-manifest.json') `
-              -ExpectedCommitSha $env:RELEASE_COMMIT_SHA `
-              -ExpectedRunId $env:RELEASE_RUN_ID `
-              -ReviewIssueNumber $env:REVIEW_ISSUE_NUMBER `
-              -StagingBaselineSha $env:STAGING_BASELINE_SHA `
-              -SqlPackagePath $env:SQLPACKAGE_PATH `
-              -TransactionVerificationPath (Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\transaction-verification.json') `
-              -AttemptPath (Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\sql-attempt.json')
+            $deploymentParameters = @{
+              Mode = 'Publish'
+              TargetEnvironment = 'staging'
+              DacpacPath = Join-Path $env:RUNNER_TEMP 'staging-release\dacpac\authcraft-db.dacpac'
+              ManifestPath = Join-Path $env:RUNNER_TEMP 'staging-release\manifest\release-manifest.json'
+              ExpectedCommitSha = $env:RELEASE_COMMIT_SHA
+              ExpectedRunId = $env:RELEASE_RUN_ID
+              ReviewIssueNumber = $env:REVIEW_ISSUE_NUMBER
+              StagingBaselineSha = $env:STAGING_BASELINE_SHA
+              SqlPackagePath = $env:SQLPACKAGE_PATH
+              TransactionVerificationPath = Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\transaction-verification.json'
+              AttemptPath = Join-Path $env:RUNNER_TEMP 'staging-deployment-evidence\sql-attempt.json'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($env:RECOVERY_DEPLOYMENT_RUN_ID)) {
+              $deploymentParameters.RecoveryDeploymentRunId = $env:RECOVERY_DEPLOYMENT_RUN_ID
+            }
+            $publishOutput = & .\scripts\Invoke-DatabaseDeployment.ps1 @deploymentParameters
             if ($LASTEXITCODE -ne 0) { throw 'The reviewed Staging database deployment failed.' }
             $publishResult = ($publishOutput -join "`n") | ConvertFrom-Json
             if ($publishResult.state -cne 'published' -or
@@ -376,7 +474,7 @@ jobs:
           }
 
       - name: Restore the Staging application publisher session
-        if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
+        if: inputs.review_only != true && success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
         uses: azure/login@v2
         with:
           client-id: a2382f63-d653-47f3-82ca-9f2696f63f0a
@@ -384,7 +482,7 @@ jobs:
           subscription-id: 948a8f49-fd90-40d9-8fa9-12f722768a7a
 
       - name: Deploy the same API package to Staging
-        if: success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
+        if: inputs.review_only != true && success() && steps.database.outcome == 'success' && steps.permission-revoke.outcome == 'success'
         id: application
         shell: pwsh
         run: |
@@ -394,6 +492,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Staging API package deployment failed after the database step; inspect Staging before retrying.' }
 
       - name: Verify Staging health, synthetic login, and tenant roles
+        if: inputs.review_only != true && success()
         id: smoke
         shell: pwsh
         env:
@@ -412,6 +511,8 @@ jobs:
         env:
           RELEASE_RUN_ID: ${{ inputs.release_run_id }}
           RELEASE_COMMIT_SHA: ${{ needs.resolve-release.outputs.release_sha }}
+          RECOVERY_DEPLOYMENT_RUN_ID: ${{ inputs.recovery_deployment_run_id }}
+          REVIEW_ONLY: ${{ inputs.review_only }}
           TRANSACTION_RESULT: ${{ steps.transaction-verification.outcome }}
           PREFLIGHT_RESULT: ${{ steps.preflight.outcome }}
           DATABASE_RESULT: ${{ steps.database.outcome }}
@@ -467,6 +568,9 @@ jobs:
             }
           }
           $attempt.deployment_run_id = $env:GITHUB_RUN_ID
+          $attempt.recovery_deployment_run_id = $env:RECOVERY_DEPLOYMENT_RUN_ID
+          $attempt.review_only = $env:REVIEW_ONLY -eq 'true'
+          $attempt.deployment_authorized = $false
           $attempt.finished_at = [DateTimeOffset]::UtcNow.ToString('o')
           $attempt.transaction_test_result = Get-StageResult $env:TRANSACTION_RESULT
           $attempt.preflight_result = Get-StageResult $env:PREFLIGHT_RESULT

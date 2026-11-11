@@ -103,9 +103,14 @@ try {
     $baselineCommitSha = if ($hasKnownBaseline) { $LastSuccessfulCommitSha } else { $null }
     if ($hasRecoveryCheckpoint) {
         $checkpointDirectory = Join-Path $evidenceDirectory 'recovery-checkpoint'
-        $checkpointOutput = & (Join-Path $PSScriptRoot 'Get-StagingRecoveryCheckpoint.ps1') `
-            -DeploymentRunId $RecoveryDeploymentRunId `
-            -OutputDirectory $checkpointDirectory
+        $checkpointParameters = @{
+            DeploymentRunId = $RecoveryDeploymentRunId
+            OutputDirectory = $checkpointDirectory
+        }
+        if ($env:GITHUB_RUN_ID -match '^[1-9][0-9]*$') {
+            $checkpointParameters.CurrentDeploymentRunId = $env:GITHUB_RUN_ID
+        }
+        $checkpointOutput = & (Join-Path $PSScriptRoot 'Get-StagingRecoveryCheckpoint.ps1') @checkpointParameters
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($checkpointOutput -join "`n"))) {
             Stop-Preflight 'Authenticated partial Staging recovery evidence is unavailable or invalid.'
         }

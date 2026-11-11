@@ -11,7 +11,8 @@ function Test-DeploymentReviewRecord {
         [string]$DacpacSha256,
         [string]$ReportSha256,
         [string]$ScriptSha256,
-        [string]$StagingBaselineSha
+        [string]$StagingBaselineSha,
+        [string]$RecoveryDeploymentRunId
     )
 
     if ($Author -cne $AllowedReviewer) {
@@ -40,6 +41,13 @@ function Test-DeploymentReviewRecord {
         postdeploy_transaction = 'true'
         deploy_report_sha256 = $ReportSha256.ToLowerInvariant()
         deploy_script_sha256 = $ScriptSha256.ToLowerInvariant()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RecoveryDeploymentRunId)) {
+        if ($RecoveryDeploymentRunId -notmatch '^[1-9][0-9]*$') {
+            return $false
+        }
+        $expectedFields.recovery_deployment_run_id = $RecoveryDeploymentRunId
+        $expectedFields.live_state_reconciled = 'accepted'
     }
 
     foreach ($field in $expectedFields.GetEnumerator()) {
