@@ -78,7 +78,7 @@ public sealed class StagingPublisherVerificationTests
         var root = FindRepositoryRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "deploy_authcraft-api-staging.yml"));
         var grant = workflow.IndexOf("-Mode Grant", StringComparison.Ordinal);
-        var publish = workflow.IndexOf("-Mode Publish", StringComparison.Ordinal);
+        var publish = workflow.IndexOf("Mode = 'Publish'", StringComparison.Ordinal);
         var revoke = workflow.IndexOf("-Mode Revoke", StringComparison.Ordinal);
         var application = workflow.IndexOf("az webapp deploy", StringComparison.Ordinal);
         Assert.True(grant > 0 && publish > grant && revoke > publish && application > revoke);
@@ -162,7 +162,7 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("Test-ReleasePreflight.ps1", workflow, StringComparison.Ordinal);
         Assert.Contains("deployment_authorized -ne $false", workflow, StringComparison.Ordinal);
         Assert.Contains("Invoke-DatabaseDeployment.ps1", workflow, StringComparison.Ordinal);
-        Assert.Contains("-Mode Publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("Mode = 'Publish'", workflow, StringComparison.Ordinal);
         Assert.Contains("az webapp deploy", workflow, StringComparison.Ordinal);
         Assert.Contains("Test-StagingRelease.ps1", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("dotnet build", workflow, StringComparison.OrdinalIgnoreCase);
@@ -188,8 +188,8 @@ public sealed class StagingPublisherVerificationTests
         Assert.Contains("id: transaction-verification", workflow, StringComparison.Ordinal);
         Assert.Contains("TransactionalPublishDocumentsSeparateSchemaAndPostdeploymentCoverage", workflow, StringComparison.Ordinal);
         Assert.Contains("AUTHCRAFT_TRANSACTION_EVIDENCE_DIRECTORY", workflow, StringComparison.Ordinal);
-        Assert.Contains("-TransactionVerificationPath", workflow, StringComparison.Ordinal);
-        Assert.Contains("-AttemptPath", workflow, StringComparison.Ordinal);
+        Assert.Contains("TransactionVerificationPath = Join-Path", workflow, StringComparison.Ordinal);
+        Assert.Contains("AttemptPath = Join-Path", workflow, StringComparison.Ordinal);
         Assert.Contains("name: staging-deployment-attempt", workflow, StringComparison.Ordinal);
         Assert.Contains("retention-days: 30", workflow, StringComparison.Ordinal);
         Assert.Contains("if-no-files-found: error", workflow, StringComparison.Ordinal);
