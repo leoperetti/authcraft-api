@@ -1909,3 +1909,26 @@ run. El run 42843791046 y sus hashes describen el plan anterior y no autorizan
 ni representan este modelo corregido. Se requiere publicar el cambio, generar
 un candidato nuevo review-only y revisar sus hashes exactos antes de cualquier
 Publish; no se ejecuto Publish ni se escribio en SQL durante esta evaluacion.
+
+### Candidato corregido review-only: run 42926987719
+
+El commit `87a0e3e5d0c483003b9dba071616a06ae24dab49` genero el
+[run 42926987719](https://github.com/leoperetti/authcraft-api/actions/runs/42926987719).
+`validate`, `verify-staging-publisher` y `preflight-staging` terminaron en
+`success`; la verificacion OIDC fue de lectura/revision. Los cinco artefactos
+se retienen por 30 dias. El run solo preparo y evaluo el candidato: no ejecuto
+Publish, post-deploy, despliegue de API, smoke ni escrituras.
+
+Hashes SHA-256 del candidato exacto:
+
+- DACPAC: `c2dc4dd0a8aa256b8fbdbe2ab78dfbd8e8d1db7c632fe342a82c0e668cfc9b94`
+- API ZIP: `a07fec3bfdbc2c2b1cf1f2bd9487a628dfd60a487db7f768f1860c315fde309f`
+- DeployReport: `ed7fb903c9a72acfc69017a4f9e9ec6c61623eceedaef928ca38c68c7b315f37`
+- SQL: `20b7fc7c958915e0131cd84b0f6999659ff35a686d48ae6c036c80e440406a6a`
+
+El DeployReport contiene cero operaciones y cero Alerts. El SQL exacto contiene
+cero `DROP CONSTRAINT`, cero `WITH NOCHECK`, cero `WAITFOR` y siete validaciones
+`WITH CHECK CHECK CONSTRAINT`; ya no recrea los dos checks confiables de
+invitaciones. Los hashes de la evaluacion local anterior no sustituyen estos
+artefactos. No hay revision autenticada para este run y el preflight de
+recuperacion no autoriza el despliegue; T040 sigue pendiente.

@@ -499,7 +499,10 @@ No agregar tablas para el modelo operativo de publicaciones.
   local de los dos checks DNI se alineo; SSDT compilo sin advertencias y 57/57
   pruebas con LocalDB pasaron. El Script read-only contra Staging no reporta
   operaciones ni DROP, sin publicar. Requiere nuevo run/revision exacta; T040
-  sigue pendiente.
+  sigue pendiente. Commit/push 87a0e3e y run 42926987719 completaron validate,
+  verify-staging-publisher y preflight-staging; reporte sin operaciones, SQL sin
+  DROP/NOCHECK/WAITFOR y siete validaciones explicitas. No se publico ni desplego;
+  falta revision autenticada para este candidato.
 - [ ] T041 [US3] Actualizar `docs\environments.md` y `specs\001-environment-separation\quickstart.md` con el workflow realmente activo, secuencia compatible de esquema/API, evidencia de release, prerrequisitos SQL/OIDC, cold start, prohibiciones de notificaciones y gates production; repetir verificación de disparadores remotos y declarar US3 completa solo con staging real validado.
 
 **Avance local 2026-11-09 (T033)**: el preflight T032 ya fue verificado con OIDC
