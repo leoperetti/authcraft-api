@@ -141,6 +141,18 @@ El registro del intento distingue `schema_evaluation_result` de `schema_result`:
 una evaluacion exitosa no significa que se haya publicado el esquema, y no se registra
 como fallo de preflight. `postdeploy_result` queda `not_executed`.
 
+El 2026-11-11 se valido esta ruta en modo de solo lectura con el candidato
+[43034696179](https://github.com/leoperetti/authcraft-api/actions/runs/43034696179)
+y el workflow de recuperacion
+[43040417613](https://github.com/leoperetti/authcraft-api/actions/runs/43040417613),
+vinculados al checkpoint parcial
+[42737737446](https://github.com/leoperetti/authcraft-api/actions/runs/42737737446).
+Preflight y evaluacion SQL terminaron correctamente; el artefacto registro
+`review_only=true`, `schema_evaluation_result=succeeded`,
+`deployment_authorized=false` y `schema_result=not_executed`. Grant, Publish,
+revocacion, deploy de API y smoke quedaron omitidos. Esto no concilia el estado vivo,
+no crea un baseline exitoso y no autoriza una publicacion posterior.
+
 Un Publish posterior requiere un dispatch separado con `review_only=false` y una
 revision autenticada para el candidato, hashes del plan, destino y run fallido
 exactos. La revision debe incluir

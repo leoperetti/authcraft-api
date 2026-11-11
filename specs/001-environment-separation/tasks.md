@@ -723,7 +723,7 @@ parcial/desconocido y nunca continúan API/promocion ni disparan rollback destru
   T035/T040 y la conciliacion funcional/versionada del estado vivo siguen
   pendientes; T073 no los completa ni habilita una publicacion.
 - [X] T074 [US3] Integrar `recovery_deployment_run_id` al workflow de despliegue Staging y agregar `review_only=true` por defecto; en ese modo ejecutar solo preflight y evaluacion DeployReport/Script, omitiendo credenciales smoke, grant/revoke, SQL Publish, deploy API y smoke. Mantener el checkpoint parcial no autorizante, aceptar posteriormente solo runs con todas las etapas mutantes omitidas y exigir que la revision autenticada vincule el run fallido y la conciliacion del estado vivo. Cubrir las rutas con pruebas y documentar que Publish sigue requiriendo autorizacion separada.
-- [ ] T075 [US3] Con autorizacion explicita, publicar el cambio de workflow y ejecutar el candidato Staging con `review_only=true` y el checkpoint parcial exacto; verificar preflight y evidencia SQL de solo lectura y confirmar que no ocurrieron grant, SQL Publish, deploy API, smoke ni cambios de datos. Registrar resultados y conservar T040 parcial; no ejecutar Publish.
+- [X] T075 [US3] Con autorizacion explicita, publicar el cambio de workflow y ejecutar el candidato Staging con `review_only=true` y el checkpoint parcial exacto; verificar preflight y evidencia SQL de solo lectura y confirmar que no ocurrieron grant, SQL Publish, deploy API, smoke ni cambios de datos. Registrados los runs candidatos `43034696179` y de recuperacion `43040417613`; T040 permanece parcial y no se ejecuto Publish.
 
 **MVP del incremento**: T062–T064, evidencia local del alcance real. No avanzar a
 publicacion si falla ese gate, aunque la opcion este activada. US1 no requiere
