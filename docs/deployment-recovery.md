@@ -121,6 +121,9 @@ posteriores. Solo tolera runs posteriores si sus pasos de permiso temporal, Publ
 SQL, revocacion, despliegue API y smoke quedaron explicitamente omitidos. El run
 actual solo se excluye mientras su estado autenticado sea `in_progress` durante el
 preflight.
+El checkout del candidato debe conservar el historial completo (`fetch-depth: 0`)
+para validar correctamente por ascendencia el commit del checkpoint; un checkout
+superficial puede rechazar falsamente un candidato descendiente.
 
 Este checkpoint es evidencia historica, no una confirmacion del estado vivo de
 Staging ni un baseline exitoso. No habilita el despliegue, no autoriza SQL/API ni

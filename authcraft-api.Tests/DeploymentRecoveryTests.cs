@@ -17,11 +17,15 @@ public sealed class DeploymentRecoveryTests
         var evaluationIndex = workflow.IndexOf("- name: Evaluate the exact Staging SQL plan without publishing", StringComparison.Ordinal);
         var permissionManagerIndex = workflow.IndexOf("- name: Log in to the Staging permission manager", StringComparison.Ordinal);
         var recordIndex = workflow.IndexOf("- name: Record Staging deployment attempt", StringComparison.Ordinal);
+        var candidateCheckoutIndex = workflow.IndexOf("- name: Check out the exact candidate source for provenance validation", StringComparison.Ordinal);
+        var transactionVerificationIndex = workflow.IndexOf("- name: Verify transaction coverage using this runner's deployment tool", StringComparison.Ordinal);
 
         Assert.True(inputsIndex >= 0 && reviewOnlyIndex > inputsIndex);
         Assert.Contains("default: true", workflow[reviewOnlyIndex..]);
         Assert.True(preflightIndex >= 0 && evaluationIndex > preflightIndex);
         Assert.True(permissionManagerIndex > evaluationIndex && recordIndex > permissionManagerIndex);
+        Assert.True(candidateCheckoutIndex >= 0 && transactionVerificationIndex > candidateCheckoutIndex);
+        Assert.Contains("fetch-depth: 0", workflow[candidateCheckoutIndex..transactionVerificationIndex], StringComparison.Ordinal);
         Assert.Contains("$preflightParameters.RecoveryDeploymentRunId", workflow[preflightIndex..evaluationIndex], StringComparison.Ordinal);
         Assert.Contains("recovery_review_required", workflow[preflightIndex..evaluationIndex], StringComparison.Ordinal);
         Assert.Contains("-Mode Evaluate", workflow[evaluationIndex..permissionManagerIndex], StringComparison.Ordinal);

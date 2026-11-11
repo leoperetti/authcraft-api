@@ -149,6 +149,7 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
           path: candidate-source
+          fetch-depth: 0
 
       - name: Set up .NET for isolated transaction verification
         uses: actions/setup-dotnet@v4
